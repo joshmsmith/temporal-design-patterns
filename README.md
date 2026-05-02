@@ -9,6 +9,7 @@ A catalog of design patterns for Temporal Workflows.
 
 - [View the live site](https://temporal-design-patterns.fly.dev/)
 - [View the full pattern catalog](docs/README.md)
+- [Contributing guide](CONTRIBUTING.md)
 
 ## Development
 
