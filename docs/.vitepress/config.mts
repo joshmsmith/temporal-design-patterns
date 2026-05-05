@@ -64,6 +64,15 @@ export default withMermaid(defineConfig({
           { text: 'Activity Dependency Injection', link: '/activity-dependency-injection' }
         ]
       },
+      {
+        text: 'QoS & Throughput Patterns',
+        items: [
+          { text: 'Overview', link: '/qos-throughput-patterns' },
+          { text: 'Downstream Rate Limiting', link: '/downstream-rate-limiting' },
+          { text: 'Priority Task Queues', link: '/priority-task-queues' },
+          { text: 'Fairness', link: '/fairness' }
+        ]
+      },
     ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/taonic/temporal-design-patterns' }
