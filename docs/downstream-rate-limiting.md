@@ -5,7 +5,7 @@
 
 The Downstream Rate Limiting pattern, also known as Task Queue rate limiting, caps how many Activities execute per second against a downstream service.
 You place throttled Activities on a dedicated Task Queue backed by Workers configured with `MaxTaskQueueActivitiesPerSecond`.
-The Temporal matching service enforces this limit before dispatching tasks, so the downstream service receives a controlled request rate regardless of how many Workflow instances are running concurrently.
+The Temporal matching service enforces this limit before dispatching tasks, so the downstream service receives a controlled request rate regardless of how many Worker instances or Workflow executions are running concurrently.
 
 ## Problem
 
@@ -34,8 +34,8 @@ flowchart LR
     end
 
     subgraph Workers
-        WK1["Worker 1\nMaxTaskQueueActivitiesPerSecond\n= 2.5 RPS"]
-        WK2["Worker 2\nMaxTaskQueueActivitiesPerSecond\n= 2.5 RPS"]
+        WK1["Worker 1\nMaxTaskQueueActivitiesPerSecond\n= 5 RPS"]
+        WK2["Worker 2\nMaxTaskQueueActivitiesPerSecond\n= 5 RPS"]
     end
 
     DS["Downstream API\n(rate limit: 5 RPS)"]
@@ -53,7 +53,7 @@ The following describes each step in the diagram:
 
 1. Any number of Workflows schedule `callApi` Activities to the dedicated `rate-limited-tq` Task Queue via an explicit `task_queue` override in their Activity options.
 2. The Temporal server holds tasks in `rate-limited-tq`. The queue depth grows if submission rate exceeds dispatch capacity.
-3. Two Workers poll the queue. Each is configured with `MaxTaskQueueActivitiesPerSecond = 2.5`, so together they dispatch at most 5 Activity tasks per second — matching the downstream API's rate limit.
+3. Two Workers poll the queue. Each is configured with `MaxTaskQueueActivitiesPerSecond = 5`, so together they dispatch at most 5 Activity tasks per second — matching the downstream API's rate limit.
 4. The downstream API receives a steady, controlled request rate regardless of how many Workflows are running concurrently.
 
 ## Implementation
@@ -235,6 +235,7 @@ The concurrency slots (`MaxConcurrentActivityExecutionSize`, `MaxConcurrentWorkf
 ## Common pitfalls
 
 - **Forgetting to override the task queue in Activity options.** If the Workflow does not explicitly specify `task_queue` in the Activity options, the Activity runs on the Workflow's default queue and bypasses the rate-limited Worker entirely.
+- **Setting conflicting MaxTaskQueueActivitiesPerSecond limits in workers.** This setting is set in Workers and sent to the Task Queue when a Worker polls. If you have multiple Workers with conflicting settings, the Workers will overwrite each other as they poll.
 - **Confusing throughput limits with concurrency limits.** `MaxTaskQueueActivitiesPerSecond` controls starts per second; `MaxConcurrentActivityExecutionSize` controls simultaneous executions. Long-running Activities that hold slots for minutes may exhaust concurrency before the RPS cap applies.
 - **Setting the cap far below actual demand.** A cap much lower than actual submission rate causes the queue to grow unboundedly. Monitor queue depth and raise the cap or add more Workers when throughput requirements grow.
 
