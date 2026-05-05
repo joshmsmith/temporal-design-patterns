@@ -1,5 +1,5 @@
 
-# Priority Task Queues
+<h1>Priority Task Queues <img src="/images/priority-task-queues-icon.svg" alt="Priority Task Queues" class="pattern-page-icon"></h1>
 
 ## Overview
 

@@ -1,5 +1,5 @@
 
-# Fairness
+<h1>Fairness <img src="/images/fairness-icon.svg" alt="Fairness" class="pattern-page-icon"></h1>
 
 ## Overview
 

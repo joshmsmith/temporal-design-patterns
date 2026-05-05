@@ -1,5 +1,5 @@
 
-# Downstream Rate Limiting
+<h1>Downstream Rate Limiting <img src="/images/downstream-rate-limiting-icon.svg" alt="Downstream Rate Limiting" class="pattern-page-icon"></h1>
 
 ## Overview
 
