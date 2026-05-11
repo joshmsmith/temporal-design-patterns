@@ -16,7 +16,9 @@ func main() {
 
 	w := worker.New(c, TaskQueue, worker.Options{})
 	w.RegisterWorkflow(OrderWorkflow)
+	w.RegisterWorkflow(DelayedCallbackWorkflow)
 	w.RegisterActivity(ProcessPayment)
+	w.RegisterActivity(SendWebhookCallback)
 
 	log.Printf("Worker listening on task queue '%s'", TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {

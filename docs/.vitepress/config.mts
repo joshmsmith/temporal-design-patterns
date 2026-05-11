@@ -54,7 +54,7 @@ export default withMermaid(defineConfig({
           { text: 'Long Running Activity', link: '/long-running-activity' },
           { text: 'Approval', link: '/approval' },
           { text: 'Delayed Start', link: '/delayed-start' },
-          { text: 'Webhooks', link: '/webhooks' }
+          { text: 'Delayed Callback', link: '/delayed-callback' }
         ]
       },
       {

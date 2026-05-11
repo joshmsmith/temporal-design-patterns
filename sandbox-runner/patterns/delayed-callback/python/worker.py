@@ -3,9 +3,9 @@ import asyncio
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from activities import process_payment
+from activities import process_payment, send_webhook_callback
 from shared import TASK_QUEUE
-from workflows import OrderWorkflow
+from workflows import DelayedCallbackWorkflow, OrderWorkflow
 
 
 async def main() -> None:
@@ -13,8 +13,8 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[OrderWorkflow],
-        activities=[process_payment],
+        workflows=[OrderWorkflow, DelayedCallbackWorkflow],
+        activities=[process_payment, send_webhook_callback],
     )
     print(f"Worker listening on task queue '{TASK_QUEUE}'", flush=True)
     await worker.run()

@@ -1,5 +1,5 @@
 {
-  "name": "Webhooks",
+  "name": "Delayed Callback",
   "languages": {
     "python": {
       "label": "Python",
@@ -22,6 +22,7 @@
         "src/main/java/Starter.java",
         "src/main/java/Worker.java",
         "src/main/java/OrderWorkflow.java",
+        "src/main/java/DelayedCallbackWorkflow.java",
         "src/main/java/Activities.java",
         "src/main/java/Shared.java"
       ],

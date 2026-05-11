@@ -46,3 +46,21 @@ func OrderWorkflow(ctx workflow.Context, order OrderInput) (string, error) {
 	err := workflow.ExecuteActivity(ao, ProcessPayment, payment).Get(ao, &result)
 	return result, err
 }
+
+func DelayedCallbackWorkflow(ctx workflow.Context, input CallbackInput) (string, error) {
+	workflow.GetLogger(ctx).Info("Sleeping before callback",
+		"delay_seconds", input.DelaySeconds, "url", input.CallbackURL)
+
+	// Durable sleep — survives worker restarts, server restarts, everything
+	if err := workflow.Sleep(ctx, time.Duration(input.DelaySeconds)*time.Second); err != nil {
+		return "", err
+	}
+
+	// Fire the outbound callback; Temporal retries on HTTP failure
+	ao := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+	})
+	var result string
+	err := workflow.ExecuteActivity(ao, SendWebhookCallback, input).Get(ao, &result)
+	return result, err
+}

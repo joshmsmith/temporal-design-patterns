@@ -1,26 +1,42 @@
-# Webhooks
+# Delayed Callback (Webhooks)
 
 ## Overview
+Delayed Callback patterns in Temporal are exactly what they sound like: manage delayed completion notification between two systems. They leverage durable timers to make this extremely simple and defined only in code.
 
-The Webhooks pattern covers three complementary strategies for integrating Temporal Workflows with systems that communicate through HTTP callbacks: receiving inbound webhooks, firing delayed outbound callbacks, and completing activities asynchronously via a callback token. Together they let you build durable, observable webhook-based integrations without ad-hoc queues, cron jobs, or fragile state machines.
+### Webhooks
+[Webhooks](https://www.redhat.com/en/topics/automation/what-is-a-webhook) are easy to build and configure with the Delayed Callback patterns. There are two recommended patterns  for integrating Temporal Workflows to communicate through HTTP callbacks: 
+- waiting and receiving inbound webhooks
+- firing delayed outbound callbacks
+
+Included is a pattern for completing activities asynchronously via a callback token and some guidance on when to use it.
+
+Temporal lets you build durable, observable webhook-based integrations without ad-hoc queues, cron jobs, or fragile state machines.
+
 
 ## Problem
 
+Waiting for another system without Durable Execution is hard. You must implement your own:
+- durable timers (e.g. with a cron per timer)
+- retry queues
+- state stores
+- reconciliation jobs 
+
+All just for a simple elayed callback.
+
 Webhook-based integrations have several failure modes that are difficult to handle without durable infrastructure:
 
-- An inbound webhook fires before the target Workflow exists, causing the callback to be lost.
-- An outbound HTTP callback fails midway through a multi-step process, and there is no record of what was sent, retried, or skipped.
-- An external job (payment processor, ML pipeline, etc.) completes and calls back, but the in-process state that was waiting for the callback has been lost to a worker restart.
+- An inbound message fires before the target system is ready or at the proper state, causing the message to be ignored or lost.
+- An outbound HTTP callback fails midway through a multi-step cross-system process, and there is no record of what was sent, retried, or skipped.
+- An external job (payment processor, ML pipeline, etc.) completes and calls back, but the in-process state that was waiting for the callback has been lost to a poor state management or application restart.
 - A delayed callback is scheduled via a cron job or message queue, but the scheduling system and the application process have no shared recovery mechanism.
 
-Without durable execution, you must bolt on your own retry queues, state stores, and reconciliation jobs — each one a new surface for bugs.
 
 ## Solution
 
-Temporal addresses each failure mode with a different primitive:
+Temporal makes solving these problems simple with the use of [durable timers](https://docs.temporal.io/workflow-execution/timers-delays) in a workflow. [Signals or Updates](https://docs.temporal.io/encyclopedia/workflow-message-passing/) are used to send events to a Workflow. All of these are just Temporal code - no extra infrastructure to deploy or manage.
 
-- **Pattern 1 — Inbound Webhooks:** Route the incoming HTTP request to a Temporal Signal or Signal-with-Start. The Workflow is the durable recipient; if it is not running yet, Temporal creates it and delivers the Signal atomically.
-- **Pattern 2 — Delayed Outbound Callbacks:** Use a durable `workflow.sleep()` before executing the outbound HTTP activity. The sleep timer survives worker and server restarts; the activity retries automatically on failure.
+- **Pattern 1 — Inbound Callback:** Route the incoming HTTP request to a Temporal Signal-with-Start. The Workflow is the durable recipient; if it is not running yet, Temporal creates it and delivers the Signal atomically.
+- **Pattern 2 — Delayed Outbound Callbacks:** Use a durable `workflow.sleep()` to set the proper delay before executing the outbound HTTP activity. The sleep timer survives worker and server restarts; the activity retries automatically on failure.
 - **Pattern 3 — Async Activity Completion:** The activity records a task token before returning, and your callback endpoint uses that token to complete the activity from the outside. The Workflow resumes with the result as if the activity had returned normally.
 
 ### Pattern 1 — Inbound Webhooks
@@ -33,24 +49,19 @@ sequenceDiagram
     participant W as Workflow
 
     E->>A: POST /webhook (payload)
-    A->>T: signal_workflow(workflow_id, "payment_received", payload)
-    Note over T: Workflow already running?
-    alt Workflow running
-        T->>W: Deliver signal
-        W->>W: Wake up, process payload
-    else Workflow not running (Signal-with-Start)
-        T->>W: Start workflow + deliver signal atomically
-        W->>W: Process payload
-    end
+    A->>T: signal_with_start(workflow_id, "payment_received", payload)
+    Note over T: Atomic: start if not running, then signal
+    T->>W: Start workflow (if not running) + deliver signal
+    W->>W: Wake up, process payload
     W->>W: Execute follow-on activities
 ```
 
 The following describes each step in the diagram:
 
 1. An external service sends an HTTP POST to your API handler — this is the inbound webhook.
-2. Your handler calls `signal_workflow` (or `signal_with_start`) on the Temporal client with the Workflow ID and payload. The handler can return an HTTP 200 immediately after this call; Temporal takes responsibility for delivery.
-3. If the Workflow is already running, Temporal delivers the Signal and the Workflow wakes up exactly where it was blocked waiting.
-4. If the Workflow does not yet exist and you use Signal-with-Start, Temporal creates it and delivers the Signal in a single atomic operation — no race condition between "start" and "signal."
+2. Your handler calls `signal_with_start` on the Temporal client with the Workflow ID and payload. The handler can return an HTTP 200 immediately after this call; Temporal takes responsibility for delivery.
+3. Temporal atomically starts the Workflow if it is not already running, then delivers the Signal — no race condition between "start" and "signal."
+4. The Workflow wakes up exactly where it was blocked waiting (or begins execution if newly created) and processes the payload.
 
 ### Pattern 2 — Delayed Outbound Callbacks
 
@@ -107,9 +118,12 @@ The following describes each step in the diagram:
 
 ## Implementation
 
+
+<DaytonaRunner pattern="delayed-callback" />
+
 ### Pattern 1 — Inbound Webhooks via Signal-with-Start
 
-The following examples show an `OrderWorkflow` that waits for a `payment_received` Signal. The starter simulates the inbound webhook path by signaling the workflow after a short delay — exactly what your HTTP handler would do on a real POST.
+The following examples show an `OrderWorkflow` that waits for a `payment_received` Signal. The starter uses Signal-with-Start to atomically create the Workflow and deliver the payment signal in one call — exactly what your HTTP handler would do on a real POST.
 
 ::: code-group
 
@@ -278,26 +292,19 @@ async def main() -> None:
 
     order_id = f"order-{int(time.time() * 1000)}"
     order = OrderInput(order_id=order_id, amount=99.99)
+    payment = PaymentPayload(payment_id=f"pay-{int(time.time() * 1000)}", amount=99.99)
 
-    print(f"Starting order workflow for {order_id}")
+    print(f"Sending webhook for order {order_id}")
 
-    # Start the workflow (it will block waiting for the payment signal)
+    # Signal-with-Start: atomically starts the workflow (if not running) and
+    # delivers the payment signal — this is exactly what your HTTP handler would do.
     handle = await client.start_workflow(
         OrderWorkflow.run,
         order,
         id=f"order-{order_id}",
         task_queue=TASK_QUEUE,
-    )
-
-    # Simulate the inbound webhook arriving 3 seconds later
-    print("Simulating inbound payment webhook in 3 seconds...")
-    await asyncio.sleep(3)
-
-    payment = PaymentPayload(payment_id=f"pay-{int(time.time() * 1000)}", amount=99.99)
-
-    # This is exactly what your HTTP handler would do:
-    await client.get_workflow_handle(f"order-{order_id}").signal(
-        OrderWorkflow.payment_received, payment
+        start_signal="payment_received",
+        start_signal_args=[payment],
     )
     print(f"Webhook signal sent: {payment.payment_id}")
 
@@ -311,8 +318,10 @@ if __name__ == "__main__":
 
 ```java [Java]
 // Starter.java
+import io.temporal.client.BatchRequest;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
+import io.temporal.client.WorkflowStub;
 import io.temporal.serviceclient.WorkflowServiceStubs;
 
 public class Starter {
@@ -321,6 +330,8 @@ public class Starter {
         WorkflowClient client = WorkflowClient.newInstance(service);
 
         String orderId = "order-" + System.currentTimeMillis();
+        Shared.PaymentPayload payment = new Shared.PaymentPayload(
+                "pay-" + System.currentTimeMillis(), 99.99);
 
         OrderWorkflow workflow = client.newWorkflowStub(
                 OrderWorkflow.class,
@@ -329,25 +340,18 @@ public class Starter {
                         .setWorkflowId("order-" + orderId)
                         .build());
 
-        System.out.println("Starting order workflow for " + orderId);
+        System.out.println("Sending webhook for order " + orderId);
 
-        // Start the workflow asynchronously — it will block waiting for the signal
-        WorkflowClient.start(workflow::run, new Shared.OrderInput(orderId, 99.99));
-
-        // Simulate the inbound webhook arriving 3 seconds later
-        System.out.println("Simulating inbound payment webhook in 3 seconds...");
-        Thread.sleep(3000);
-
-        Shared.PaymentPayload payment = new Shared.PaymentPayload(
-                "pay-" + System.currentTimeMillis(), 99.99);
-
-        // This is exactly what your HTTP handler would do:
-        workflow.paymentReceived(payment);
+        // Signal-with-Start: atomically starts the workflow (if not running) and
+        // delivers the payment signal — this is exactly what your HTTP handler would do.
+        BatchRequest request = client.newSignalWithStartRequest();
+        request.add(workflow::run, new Shared.OrderInput(orderId, 99.99));
+        request.add(workflow::paymentReceived, payment);
+        client.signalWithStart(request);
         System.out.println("Webhook signal sent: " + payment.paymentId());
 
         // Wait for the workflow to complete
-        OrderWorkflow stub = client.newWorkflowStub(OrderWorkflow.class, "order-" + orderId);
-        String result = WorkflowStub.fromTyped(stub).getResult(String.class);
+        String result = WorkflowStub.fromTyped(workflow).getResult(String.class);
         System.out.println("Order completed: " + result);
 
         System.exit(0);
@@ -380,29 +384,29 @@ func main() {
 	workflowID := "order-" + orderID
 
 	order := OrderInput{OrderID: orderID, Amount: 99.99}
-	fmt.Printf("Starting order workflow for %s\n", orderID)
-
-	we, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:        workflowID,
-		TaskQueue: TaskQueue,
-	}, OrderWorkflow, order)
-	if err != nil {
-		log.Fatalln("Start workflow failed:", err)
-	}
-
-	// Simulate the inbound webhook arriving 3 seconds later
-	fmt.Println("Simulating inbound payment webhook in 3 seconds...")
-	time.Sleep(3 * time.Second)
-
 	payment := PaymentPayload{
 		PaymentID: fmt.Sprintf("pay-%d", time.Now().UnixMilli()),
 		Amount:    99.99,
 	}
 
-	// This is exactly what your HTTP handler would do:
-	err = c.SignalWorkflow(ctx, workflowID, we.GetRunID(), SignalName, payment)
+	fmt.Printf("Sending webhook for order %s\n", orderID)
+
+	// Signal-with-Start: atomically starts the workflow (if not running) and
+	// delivers the payment signal — this is exactly what your HTTP handler would do.
+	we, err := c.SignalWithStartWorkflow(
+		ctx,
+		workflowID,
+		SignalName,
+		payment,
+		client.StartWorkflowOptions{
+			ID:        workflowID,
+			TaskQueue: TaskQueue,
+		},
+		OrderWorkflow,
+		order,
+	)
 	if err != nil {
-		log.Fatalln("Signal failed:", err)
+		log.Fatalln("SignalWithStart failed:", err)
 	}
 	fmt.Printf("Webhook signal sent: %s\n", payment.PaymentID)
 
@@ -424,8 +428,6 @@ Use a durable `workflow.sleep()` before the outbound activity. The timer is stor
 
 ```python [Python]
 # delayed_callback_workflow.py
-import asyncio
-from dataclasses import dataclass
 from datetime import timedelta
 
 from temporalio import workflow
@@ -438,21 +440,22 @@ with workflow.unsafe.imports_passed_through():
 @workflow.defn
 class DelayedCallbackWorkflow:
     @workflow.run
-    async def run(self, input: CallbackInput) -> None:
+    async def run(self, input: CallbackInput) -> str:
         workflow.logger.info(
             f"Sleeping {input.delay_seconds}s before calling {input.callback_url}"
         )
 
         # Durable sleep — survives worker restarts, server restarts, everything
-        await asyncio.sleep(input.delay_seconds)
+        await workflow.sleep(timedelta(seconds=input.delay_seconds))
 
         # Fire the outbound callback; Temporal retries on HTTP failure
-        await workflow.execute_activity(
+        result = await workflow.execute_activity(
             send_webhook_callback,
             input,
             start_to_close_timeout=timedelta(minutes=5),
         )
         workflow.logger.info(f"Callback delivered to {input.callback_url}")
+        return result
 ```
 
 ```java [Java]
@@ -646,8 +649,7 @@ func CompleteJob(ctx context.Context, c client.Client, jobID string, result stri
 		return err
 	}
 	taskToken, _ := hex.DecodeString(tokenHex)
-	return c.CompleteActivityByID(ctx, "", "", "", result, nil)
-	_ = taskToken
+	return c.CompleteActivity(ctx, taskToken, result, nil)
 }
 ```
 
@@ -657,15 +659,12 @@ func CompleteJob(ctx context.Context, c client.Client, jobID string, result stri
 
 | Scenario | Pattern |
 | :--- | :--- |
-| External service POSTs a webhook; Workflow may or may not exist yet | Signal-with-Start (Pattern 1) |
-| Workflow is already running; inbound webhook updates its state | Signal (Pattern 1) |
-| Fire an outbound HTTP callback after a delay (seconds to weeks) | `workflow.sleep()` + activity (Pattern 2) |
+| External service POSTs a webhook (Workflow may or may not be running) | Signal-with-Start (Pattern 1) |
+| Fire an outbound HTTP callback after a delay (seconds to years) | `workflow.sleep()` + activity (Pattern 2) |
 | Submit a job to an external system; wait for its completion webhook | Async activity completion (Pattern 3) |
 | Poll an external system that does not support webhooks | [Polling External Services](/polling) pattern |
 
-**Do not use** Signal-with-Start when multiple workflows with the same ID could be unintentionally created — use plain Signal and handle the "not found" error explicitly.
-
-**Do not use** Pattern 2 for delays shorter than one second; use a heartbeating activity loop instead.
+**Do not use** Pattern 2 for delays shorter than one second as you should not rely on (sub-second accuracy for timers)[https://docs.temporal.io/workflow-execution/timers-delays]. 
 
 ## Benefits and trade-offs
 
@@ -695,7 +694,7 @@ func CompleteJob(ctx context.Context, c client.Client, jobID string, result stri
 ## Best practices
 
 - Use stable, business-meaningful Workflow IDs (for example, `order-{order_id}`) so that Signal-with-Start and queries always route to the right Workflow.
-- Return HTTP 200 from your inbound webhook handler as soon as you have called `signal_workflow`; do not wait for the Workflow to process the payload.
+- Return HTTP 200 from your inbound webhook handler as soon as you have called `signal_with_start`; do not wait for the Workflow to process the payload.
 - Set a realistic `start_to_close_timeout` on outbound callback activities — long enough for the destination to respond, short enough to surface failures quickly.
 - For async activity completion, persist the task token in a transactional write alongside the job submission so you never lose the token.
 - Add a timeout to the `workflow.wait_condition` / `Workflow.await` call in inbound webhook Workflows so they do not wait indefinitely if the webhook is never delivered.
@@ -704,9 +703,9 @@ func CompleteJob(ctx context.Context, c client.Client, jobID string, result stri
 ## Common pitfalls
 
 - **Sending a plain Signal to a Workflow that does not exist** causes an error. Use Signal-with-Start when the Workflow may not be running.
-- **Losing the task token** in Pattern 3. If the service storing task tokens is unavailable when the callback arrives, the activity can never complete. Store the token durably (database, not in-process cache).
 - **Using `time.sleep()` (non-durable)** in Pattern 2 instead of `workflow.sleep()`. A process sleep disappears on restart; only Temporal's timer is durable.
 - **Non-deterministic Workflow IDs** — generating IDs from timestamps or random values means Signal-with-Start creates a new Workflow on every webhook delivery instead of routing to the existing one.
+- **Losing the task token** in Pattern 3. If the service storing task tokens is unavailable when the callback arrives, the activity can never complete. Store the token durably (database, not in-process cache).
 - **Forgetting `doNotCompleteOnReturn()` / `CompleteAsyncError`** in Pattern 3. Without this, Temporal marks the activity as completed immediately when the function returns, before the external callback arrives.
 
 ## Related patterns
@@ -716,3 +715,4 @@ func CompleteJob(ctx context.Context, c client.Client, jobID string, result stri
 - [Polling External Services](/polling) — alternative to callbacks when the external system does not support webhooks
 - [Delayed Start](/delayed-start) — defer Workflow execution to a future time without `workflow.sleep()`
 - [Long-Running Activity](/long-running-activity) — heartbeating pattern for activities that run for extended periods
+- **In the future** - Org-to-Org Nexus, stay tuned.
