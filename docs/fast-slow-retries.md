@@ -1,6 +1,10 @@
 
 <h1>Fast/Slow Retries <img src="/images/polling-icon.png" alt="Fast/Slow Retries" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Orchestrate two retry phases in the Workflow: a fast phase with short intervals and bounded attempts for transient errors, followed by a slow phase with long intervals and unlimited retries for extended outages. **Use this when a single `RetryPolicy` should not cover both brief blips and hour-long outages or maintenance windows.**
+:::
+
 ## Overview
 
 The Fast/Slow Retries pattern runs an Activity through two distinct retry phases: a fast phase with a short interval and bounded attempt count, followed by an unlimited slow phase with a long fixed interval managed by the Temporal Service.
@@ -22,7 +26,7 @@ Use the Workflow itself as a retry orchestrator across two phases:
 
 **Phase 1 — Fast retries**: Execute the Activity with a short `InitialInterval` and a bounded `MaximumAttempts`. This phase recovers from transient errors within seconds or minutes.
 
-**Phase 2 — Slow retries**: When the fast retry policy is exhausted, catch the `ActivityError` in the Workflow and execute the Activity again with a long `InitialInterval` and unlimited `MaximumAttempts`. The Temporal Service owns the slow retry loop; the Workflow blocks until the Activity eventually succeeds.
+**Phase 2 — Slow retries**: When the fast retry policy is exhausted, catch the `ActivityError` in the Workflow and execute the Activity again with a long `InitialInterval` and unlimited `MaximumAttempts`. The Temporal Service owns the slow retry management; the Workflow blocks until the Activity eventually succeeds.
 
 This design is invisible in conventional retry libraries because it requires the retry orchestrator to be a durable, resumable process — exactly what a Temporal Workflow is.
 
@@ -58,11 +62,13 @@ The following describes each step:
 
 ## Implementation
 
-### Two-phase workflow retry loop
+<DaytonaRunner pattern="fast-slow-retries" />
+
+### Two-phase workflow retry management
 
 The key change between phases is the retry interval and attempt count.
-In Phase 1, the Temporal Service manages a fast loop: short interval, bounded attempts.
-In Phase 2, the Temporal Service manages a slow loop: long fixed interval, unlimited attempts.
+In Phase 1, the Temporal Service manages a fast set of retries: short interval, bounded attempts.
+In Phase 2, the Temporal Service manages a slow set of retries: long fixed interval, unlimited attempts.
 
 ::: code-group
 ```python [Python]
@@ -77,7 +83,7 @@ import activities
 class FastSlowRetryWorkflow:
     @workflow.run
     async def run(self, request: str) -> str:
-        # Phase 1: fast retries — let Temporal manage the loop
+        # Phase 1: fast retries 
         fast_policy = RetryPolicy(
             initial_interval=timedelta(seconds=1),
             backoff_coefficient=1.5,
@@ -97,7 +103,7 @@ class FastSlowRetryWorkflow:
                 extra={"request": request},
             )
 
-            # Phase 2: slow retries — Temporal Service owns the loop
+            # Phase 2: slow retries 
             slow_policy = RetryPolicy(
                 initial_interval=timedelta(minutes=5),
                 backoff_coefficient=1.0,
@@ -124,7 +130,7 @@ import (
 func FastSlowRetryWorkflow(ctx workflow.Context, request string) (string, error) {
     log := workflow.GetLogger(ctx)
 
-    // Phase 1: fast retries — let Temporal manage the loop
+    // Phase 1: fast retries 
     fastCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
         StartToCloseTimeout: 30 * time.Second,
         RetryPolicy: &temporal.RetryPolicy{
@@ -141,7 +147,7 @@ func FastSlowRetryWorkflow(ctx workflow.Context, request string) (string, error)
         log.Warn("Fast retries exhausted — switching to slow retry phase",
             "request", request)
 
-        // Phase 2: slow retries — Temporal Service owns the loop
+        // Phase 2: slow retries 
         slowCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
             StartToCloseTimeout: 30 * time.Second,
             RetryPolicy: &temporal.RetryPolicy{
@@ -168,7 +174,7 @@ import java.time.Duration;
 public class FastSlowRetryWorkflowImpl implements FastSlowRetryWorkflow {
     @Override
     public String run(String request) {
-        // Phase 1: fast retries — let Temporal manage the loop
+        // Phase 1: fast retries 
         DownstreamActivities fastActivities = Workflow.newActivityStub(
             DownstreamActivities.class,
             ActivityOptions.newBuilder()
@@ -189,7 +195,7 @@ public class FastSlowRetryWorkflowImpl implements FastSlowRetryWorkflow {
                 "Fast retries exhausted — switching to slow retry phase: " + request
             );
 
-            // Phase 2: slow retries — Temporal Service owns the loop
+            // Phase 2: slow retries 
             DownstreamActivities slowActivities = Workflow.newActivityStub(
                 DownstreamActivities.class,
                 ActivityOptions.newBuilder()
@@ -233,13 +239,13 @@ const slowDownstream = wf.proxyActivities<typeof activities>({
 });
 
 export async function fastSlowRetryWorkflow(request: string): Promise<string> {
-    // Phase 1: fast retries — let Temporal manage the loop
+    // Phase 1: fast retries 
     try {
         return await fastDownstream.callDownstream(request);
     } catch {
         wf.log.warn('Fast retries exhausted — switching to slow retry phase', { request });
 
-        // Phase 2: slow retries — Temporal Service owns the loop
+        // Phase 2: slow retries 
         return await slowDownstream.callDownstream(request);
     }
 }
@@ -256,6 +262,7 @@ Adjust the phase parameters to match the characteristics of your downstream syst
 | Phase 1 `BackoffCoefficient` | 1.5–2.0 | Spread retries to avoid overwhelming a briefly degraded system |
 | Phase 1 `MaximumAttempts` | 5–20 | Enough attempts to cover a short transient period |
 | Phase 2 `InitialInterval` | 1–15 minutes | Long enough to avoid hammering a down system; short enough to recover promptly |
+| Phase 2 `BackoffCoefficient` | 1.0 | Keeps the interval fixed; the default 2.0 would exponentially increase delays between slow-phase attempts |
 
 Phase 2 runs indefinitely by default.
 If the business process has a maximum wait time, add a `ScheduleToCloseTimeout` or use a Workflow execution timeout to impose an outer bound.
@@ -265,7 +272,6 @@ If the business process has a maximum wait time, add a `ScheduleToCloseTimeout` 
 - **Log the phase transition.** The transition from fast to slow is a meaningful signal that the downstream system may have a sustained problem. Log it with enough context — request identifier, attempt count, timestamp — to aid diagnosis.
 - **Leave `MaximumAttempts` unset in Phase 2.** Omitting `MaximumAttempts` (or setting it to 0) gives the slow phase unlimited retries. The Temporal Service manages the wait between attempts via `InitialInterval`; the Workflow simply blocks until the Activity eventually succeeds.
 - **Combine with Retry Alerting via Metrics.** Add a metric counter inside the Activity to surface slow-phase attempts to on-call teams. See [Retry Alerting via Metrics](retry-metrics.md).
-- **Consider Continue-As-New for very long slow phases.** If the slow phase runs for thousands of iterations, the Workflow history will grow. Use [Continue-As-New](continue-as-new.md) to reset history periodically.
 
 ## Common pitfalls
 
@@ -277,7 +283,6 @@ If the business process has a maximum wait time, add a `ScheduleToCloseTimeout` 
 
 - [Retry Alerting via Metrics](retry-metrics.md): Emit a metric in the slow-phase Activity to surface sustained failures to on-call teams.
 - [Delayed Retry](delayed-retry.md): Override the retry interval per error type using `nextRetryDelay` on `ApplicationFailure`.
-- [Continue-As-New](continue-as-new.md): Reset Workflow history for very long-running retry loops.
 - [Error Handling & Retry Patterns](error-handling-patterns.md): Overview and decision tree for all retry patterns.
 
 ## References

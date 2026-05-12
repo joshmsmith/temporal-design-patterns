@@ -1,11 +1,17 @@
 
 <h1>Downstream Rate Limiting <img src="/images/downstream-rate-limiting-icon.svg" alt="Downstream Rate Limiting" class="pattern-page-icon"></h1>
 
+
+:::info TLDR
+Used to **rate limit outbound requests to a downstream service**. Use this to limit the rate of requests, such as to a third-party API, or payment processor, or other external system, that concurrent Workflows would otherwise exceed.
+:::
+
 ## Overview
 
 The Downstream Rate Limiting pattern, also known as Task Queue rate limiting, caps how many Activities execute per second against a downstream service.
 You place throttled Activities on a dedicated Task Queue backed by Workers configured with `MaxTaskQueueActivitiesPerSecond`.
 The Temporal matching service enforces this limit before dispatching tasks, so the downstream service receives a controlled request rate regardless of how many Worker instances or Workflow executions are running concurrently.
+
 
 ## Problem
 

@@ -70,7 +70,7 @@ Patterns for controlling how Temporal retries Activities, surfaces persistent fa
 <img src="/images/approval-icon.png" alt="Resumable Activity">
 <span>Resumable Activity</span>
 </div>
-<p>Park the Workflow after retries are exhausted and wait for a human to signal a correction, then resume execution from where it left off.</p>
+<p>Park the Workflow after retries are exhausted and wait for a human to signal it's ok to proceed or a data correction, then resume execution from where it left off.</p>
 </a>
 </div>
 </div>

@@ -1,6 +1,10 @@
 
 <h1>Fairness <img src="/images/fairness-icon.svg" alt="Fairness" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Assign a `FairnessKey` and weight to Workflows and Activities so each tenant or group receives the **correct proportional share of Worker capacity** on a shared Task Queue. Use this when a high-volume caller would otherwise starve other tenants without requiring separate queues per tenant.
+:::
+
 ## Overview
 
 The Fairness pattern distributes Worker capacity proportionally across tenants or user groups within a single Task Queue so that a burst from one caller cannot starve others. Each group is assigned a fairness key and an optional weight; the Temporal matching service dispatches tasks in weighted round-robin order across all keys.

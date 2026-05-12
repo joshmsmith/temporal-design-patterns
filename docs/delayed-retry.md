@@ -1,6 +1,10 @@
 
 <h1>Delayed Retry <img src="/images/delayed-start-icon.png" alt="Delayed Retry" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Throw an `ApplicationFailure` with `nextRetryDelay` set inside the Activity to **delay the next retry for a fixed time.** Use this when an error carries its own timing information — such as an HTTP 429 `Retry-After` header or a known maintenance window — so Temporal waits exactly as long as needed instead of following the generic backoff schedule.
+:::
+
 ## Overview
 
 The Delayed Retry pattern overrides the next retry interval for a specific failure by throwing an `ApplicationFailure` with a `nextRetryDelay` field set from inside the Activity.
@@ -50,6 +54,8 @@ The following describes each step:
 4. The next attempt succeeds and Temporal delivers the result to the Workflow.
 
 ## Implementation
+
+<DaytonaRunner pattern="delayed-retry" />
 
 ### Overriding the retry delay from the response
 

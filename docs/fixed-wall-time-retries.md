@@ -1,6 +1,10 @@
 
 <h1>Fixed Wall-Time Retries <img src="/images/delayed-start-icon.png" alt="Fixed Wall-Time Retries" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Set `ScheduleToCloseTimeout` on the Activity call to enforce a hard time budget across all retry attempts. Use this when a business SLA requires the Activity to **succeed or fail within a defined window**, regardless of how many individual attempts occur.
+:::
+
 ## Overview
 
 The Fixed Wall-Time Retries pattern enforces a maximum total elapsed time across all Activity retry attempts using `ScheduleToCloseTimeout`.
@@ -49,6 +53,8 @@ The following describes each step:
 4. When the budget expires, Temporal delivers an `ActivityError` to the Workflow, which can log, alert, or compensate.
 
 ## Implementation
+
+<DaytonaRunner pattern="fixed-wall-time-retries" />
 
 ### Enforcing a 2-minute SLA
 
@@ -130,6 +136,7 @@ func PaymentAuthWorkflow(ctx workflow.Context, transactionID string) (string, er
 // ShipmentNotificationWorkflowImpl.java
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 
@@ -151,7 +158,7 @@ public class PaymentAuthWorkflowImpl implements PaymentAuthWorkflow {
     public String run(String transactionId) {
         try {
             return activities.authorizeTransaction(transactionId);
-        } catch (Exception e) {
+        } catch (ActivityFailure e) {
             Workflow.getLogger(getClass()).error(
                 "Authorization failed — 2-minute SLA breached: " + transactionId, e
             );

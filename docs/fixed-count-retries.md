@@ -1,6 +1,10 @@
 
 <h1>Fixed Count of Retries <img src="/images/pick-first-icon.png" alt="Fixed Count of Retries" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Set `MaximumAttempts` on the `RetryPolicy` to **cap how many times Temporal will attempt an Activity**. Use this when each attempt consumes a paid API call, a rate-limited token, or any scarce resource where unbounded retries translate directly to unbounded cost.
+:::
+
 ## Overview
 
 The Fixed Count of Retries pattern caps the total number of Activity execution attempts by setting `MaximumAttempts` on the `RetryPolicy`.
@@ -52,6 +56,8 @@ The following describes each step:
 4. The Workflow catches the error and handles it — logging, compensating, or escalating — rather than accumulating further cost.
 
 ## Implementation
+
+<DaytonaRunner pattern="fixed-count-retries" />
 
 ### Capping attempts
 
@@ -122,6 +128,7 @@ func PaymentWorkflow(ctx workflow.Context, orderID string) (string, error) {
 // PaymentWorkflowImpl.java
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 
@@ -140,7 +147,7 @@ public class PaymentWorkflowImpl implements PaymentWorkflow {
     public String run(String orderId) {
         try {
             return activities.chargePaymentApi(orderId);
-        } catch (Exception e) {
+        } catch (ActivityFailure e) {
             // All retries exhausted — handle the failure here.
             // Options: alert on-call, trigger a compensation activity, or escalate to a human.
             Workflow.getLogger(getClass()).error("Payment failed after 3 attempts", e);

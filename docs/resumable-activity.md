@@ -1,6 +1,10 @@
 
 <h1>Resumable Activity (AKA Pause On Failure) <img src="/images/approval-icon.png" alt="Resumable Activity" class="pattern-page-icon"></h1>
 
+:::info TLDR
+After retries are exhausted, **park the Workflow in a waiting state and block on a Signal that notifies the Workflow to proceed or optionally delivers corrected input from a human operator, then re-execute the Activity.** Use this when failures are caused by bad input that can be fixed externally — so the Workflow resumes exactly where it left off instead of being restarted from scratch.
+:::
+
 ## Overview
 
 The Resumable Activity pattern parks a Workflow, durably waiting, after Activity retries are exhausted, waits for a corrective Signal from a human operator, then re-executes the Activity with the corrected input.
@@ -73,6 +77,8 @@ The key insight: **the Workflow never died**. It survived bad input, waited inde
 
 ## Implementation
 
+<DaytonaRunner pattern="resumable-activity" />
+
 ### Workflow with correction and approval signals
 
 The Workflow maintains state as named fields.
@@ -104,6 +110,7 @@ class TransferWorkflow:
     @workflow.run
     async def run(self, transfer: TransferInput) -> str:
         account = transfer.to_account
+        correction_attempts = 0
 
         while True:
             self._status = "TRANSFERRING"
@@ -116,6 +123,10 @@ class TransferWorkflow:
                 )
                 break  # Activity succeeded — exit the correction loop
             except ActivityError:
+                correction_attempts += 1
+                if correction_attempts > 5:
+                    self._status = "FAILED"
+                    raise
                 self._status = "AWAITING_CORRECTION"
                 workflow.logger.warning(
                     "Transfer failed — waiting for account correction",
@@ -186,6 +197,7 @@ func TransferWorkflow(ctx workflow.Context, input TransferInput) (string, error)
     actCtx := workflow.WithActivityOptions(ctx, ao)
 
     account := input.ToAccount
+    correctionCount := 0
     for {
         status = "TRANSFERRING"
         err := workflow.ExecuteActivity(actCtx, ExecuteTransfer, TransferInput{
@@ -198,6 +210,11 @@ func TransferWorkflow(ctx workflow.Context, input TransferInput) (string, error)
             break // Activity succeeded — exit the correction loop
         }
 
+        correctionCount++
+        if correctionCount > 5 {
+            status = "FAILED"
+            return "", err
+        }
         status = "AWAITING_CORRECTION"
         workflow.GetLogger(ctx).Warn("Transfer failed — waiting for account correction",
             "to_account", account)
@@ -270,6 +287,7 @@ public class TransferWorkflowImpl implements TransferWorkflow {
     @Override
     public String run(TransferInput input) {
         String account = input.getToAccount();
+        int correctionCount = 0;
 
         while (true) {
             status = "TRANSFERRING";
@@ -279,6 +297,11 @@ public class TransferWorkflowImpl implements TransferWorkflow {
                 );
                 break; // Activity succeeded — exit the correction loop
             } catch (ActivityFailure e) {
+                correctionCount++;
+                if (correctionCount > 5) {
+                    status = "FAILED";
+                    throw e;
+                }
                 status = "AWAITING_CORRECTION";
                 Workflow.getLogger(getClass()).warn(
                     "Transfer failed — waiting for account correction: " + account
@@ -352,13 +375,19 @@ export async function transferWorkflow(input: TransferInput): Promise<string> {
     wf.setHandler(getStatusQuery, () => status);
 
     let account = input.toAccount;
+    let correctionCount = 0;
 
     while (true) {
         status = 'TRANSFERRING';
         try {
             await executeTransfer({ ...input, toAccount: account });
             break; // Activity succeeded — exit the correction loop
-        } catch {
+        } catch (err) {
+            correctionCount++;
+            if (correctionCount > 5) {
+                status = 'FAILED';
+                throw err;
+            }
             status = 'AWAITING_CORRECTION';
             wf.log.warn('Transfer failed — waiting for account correction', { account });
             // Park until the admin sends a correction signal
@@ -411,16 +440,19 @@ stateDiagram-v2
     PENDING --> TRANSFERRING : Workflow starts
     TRANSFERRING --> AWAITING_CORRECTION : Activity retries exhausted
     AWAITING_CORRECTION --> TRANSFERRING : retryWithCorrection signal received
+    AWAITING_CORRECTION --> FAILED : 5 correction attempts exceeded
     TRANSFERRING --> AWAITING_APPROVAL : Activity succeeds
     AWAITING_APPROVAL --> COMPLETED : approve(true) signal
     AWAITING_APPROVAL --> REJECTED : approve(false) signal
     COMPLETED --> [*]
     REJECTED --> [*]
+    FAILED --> [*]
 ```
 
 ## Best practices
 
 - **Use a bounded `MaximumAttempts` before parking.** Allow a few automatic retries to recover from transient failures. Parking immediately on the first failure forces operators to intervene for problems that would have resolved on their own.
+- **Cap the correction loop.** Each correction cycle — park, receive signal, re-execute Activity — adds events to the Workflow history (signal received, state transitions, Activity scheduled/completed). Bound the loop to a small number of attempts (the examples use 5) and fail the Workflow explicitly if exceeded, rather than allowing unbounded growth from a stream of bad corrections.
 - **Expose status via a Query method.** The `getStatus` Query gives operations tooling visibility into where the Workflow is parked without requiring access to the Workflow history.
 - **Validate the correction in the Signal handler.** Check that the corrected account is non-empty and matches the expected format before setting the state. An invalid correction just parks the Workflow again, but a clear error message helps operators.
 - **Log at every state transition.** The `AWAITING_CORRECTION` and `AWAITING_APPROVAL` states can last hours or days. Structured log lines at each transition make the audit trail clear.

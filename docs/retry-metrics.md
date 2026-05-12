@@ -1,6 +1,10 @@
 
 <h1>Retry Alerting via Metrics <img src="/images/downstream-rate-limiting-icon.svg" alt="Retry Alerting via Metrics" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Emit a counter metric from inside the Activity when the attempt number exceeds a threshold, using the SDK's built-in metrics scope. **Use this to surface silent, persistent failures to on-call teams before they breach an SLA** — without changing retry behavior or adding Workflow-level tracking.
+:::
+
 ## Overview
 
 The Retry Alerting via Metrics pattern emits a custom metric counter from inside the Activity whenever the attempt number exceeds a threshold.
@@ -50,6 +54,8 @@ The following describes each step:
 5. The metrics backend accumulates the counter. Your alerting system fires when the counter or rate crosses a configured threshold.
 
 ## Implementation
+
+<DaytonaRunner pattern="retry-metrics" />
 
 ### Emitting a counter at high attempt counts
 
@@ -137,7 +143,6 @@ public class CallDownstreamActivityImpl implements CallDownstreamActivity {
 ```typescript [TypeScript]
 // activities.ts
 import { Context } from '@temporalio/activity';
-import { ApplicationFailure } from '@temporalio/activity';
 
 const ALERT_THRESHOLD = 5;
 
