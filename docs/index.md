@@ -190,3 +190,43 @@ Having these patterns in your toolbox helps you solve recurring problems in a ba
 </a>
 </div>
 </div>
+
+## Batch processing patterns {.pattern-section-title}
+
+<div class="pattern-grid">
+<div class="pattern-tile">
+<a href="fanout-child-workflows">
+<div class="pattern-tile-header">
+<span>Fan-Out with Child Workflows</span>
+</div>
+<p>Distributes a large record set across parallel Child Workflows for concurrent processing with automatic scaling.</p>
+</a>
+</div>
+
+<div class="pattern-tile">
+<a href="batch-iterator">
+<div class="pattern-tile-header">
+<span>Batch Iterator</span>
+</div>
+<p>Pages through unbounded datasets using Continue-As-New to prevent history overflow while maintaining exactly-once processing guarantees.</p>
+</a>
+</div>
+
+<div class="pattern-tile">
+<a href="sliding-window">
+<div class="pattern-tile-header">
+<span>Sliding Window</span>
+</div>
+<p>Maintains a fixed number of concurrently active Child Workflows, starting a new one each time an existing one completes.</p>
+</a>
+</div>
+
+<div class="pattern-tile">
+<a href="mapreduce-tree">
+<div class="pattern-tile-header">
+<span>MapReduce Tree</span>
+</div>
+<p>Recursively splits a dataset into a binary tree of Child Workflows, processes leaves in parallel, then aggregates results back up the tree.</p>
+</a>
+</div>
+</div>

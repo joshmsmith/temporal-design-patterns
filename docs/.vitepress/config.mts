@@ -73,6 +73,16 @@ export default withMermaid(defineConfig({
           { text: 'Fairness', link: '/fairness' }
         ]
       },
+      {
+        text: 'Batch Processing Patterns',
+        items: [
+          { text: 'Overview', link: '/batch-processing-patterns' },
+          { text: 'Fan-Out with Child Workflows', link: '/fanout-child-workflows' },
+          { text: 'Batch Iterator', link: '/batch-iterator' },
+          { text: 'Sliding Window', link: '/sliding-window' },
+          { text: 'MapReduce Tree', link: '/mapreduce-tree' }
+        ]
+      },
     ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/taonic/temporal-design-patterns' }
