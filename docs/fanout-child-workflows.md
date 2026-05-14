@@ -2,7 +2,7 @@
 # Fan-Out with Child Workflows
 
 :::info TLDR
-Split your record set into fixed-size chunks and start **one child Workflow per chunk** so that each chunk's history stays within Temporal's limits. Use this when your record set fits within ~4 million items, you want maximum concurrency with no rate control, and you can pre-compute how many chunks you need before the job starts.
+Split your record set into fixed-size chunks and start **one child Workflow per chunk** so that each chunk's history stays within Temporal's limits. Use this when you want maximum concurrency with no rate control and you can pre-compute how many chunks you need before the job starts. Keep the total number of children per parent under 1,000; use [Sliding Window](sliding-window) or [Batch Iterator](batch-iterator) for larger workloads.
 :::
 
 ## Overview
@@ -150,7 +150,7 @@ class FanOutWorkflow:
             handles.append(handle)
             offset += chunk_size
 
-        results = await asyncio.gather(*[h.result() for h in handles])
+        results = await asyncio.gather(*handles)
         return sum(results)
 ```
 
@@ -159,7 +159,9 @@ class FanOutWorkflow:
 package main
 
 import (
-	"go.temporal.io/sdk/temporal"
+	"fmt"
+	"time"
+
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -189,7 +191,7 @@ func FanOutWorkflow(ctx workflow.Context, totalRecords int, chunkSize int) (int,
 	for _, f := range futures {
 		var n int
 		if err := f.Get(ctx, &n); err != nil {
-			return total, temporal.NewApplicationError("child failed", "ChildFailed", err)
+			return total, err
 		}
 		total += n
 	}
@@ -261,12 +263,12 @@ public class FanOutWorkflowImpl implements FanOutWorkflow {
 - **Use offset and length, not explicit IDs.** Pass only two integers to each child rather than a full slice of IDs. The child fetches its own records. This keeps history events small.
 - **Size chunks to stay under the Activity limit.** Each child Workflow can have at most 2,000 in-flight Activities. Aim for chunks of 500 records or fewer if each record maps to one Activity.
 - **Cap concurrent children in the parent.** Starting thousands of child Workflows simultaneously puts pressure on the namespace. Consider batching child starts or using [Sliding Window](sliding-window) if you need tighter concurrency control.
-- **Set `PARENT_CLOSE_POLICY_ABANDON`** if you do not need the parent to collect results. This lets children complete independently even if the parent is cancelled or timed out.
+- **Set `PARENT_CLOSE_POLICY_ABANDON`** for fire-and-forget fan-outs where the parent does not need to collect results. With the default `TERMINATE` policy, cancelling or timing out the parent will terminate all in-flight children.
 - **Give each child a deterministic Workflow ID** (`parentId/batch-<offset>`). This makes it safe to re-run the parent: Temporal deduplicates child starts by Workflow ID, so already-completed children are not re-executed.
 
 ## Common Pitfalls
 
-- **Starting too many children at once.** Each child start adds to the parent's history. If you have thousands of chunks, consider paging through them or switching to the [Batch Iterator](batch-iterator) or [Sliding Window](sliding-window).
+- **Starting too many children at once.** Each child start adds to the parent's history. Keep total children per parent under 1,000 per [Temporal guidance](https://docs.temporal.io/workflows#when-to-use-child-workflows). If you need more children, switch to [MapReduce Tree](mapreduce-tree) or [Sliding Window](sliding-window).
 - **Passing large lists of IDs.** Workflow inputs are stored in event history. Passing millions of record IDs as a list will blow the history size limit. Use offset + length instead.
 - **Ignoring child failures.** A failed child does not automatically fail the parent unless you await all results. Always await child handles and handle errors explicitly.
 

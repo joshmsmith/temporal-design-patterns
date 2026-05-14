@@ -48,13 +48,15 @@ func SlidingWindowWorkflow(ctx workflow.Context, input SlidingWindowInput) (int,
 	dispatched := 0
 	active := inFlight
 
-	startChild := func(recordID string) {
+	startChild := func(recordID string) error {
 		cwo := workflow.ChildWorkflowOptions{
 			WorkflowID:        fmt.Sprintf("%s/record-%s", parentID, recordID),
 			TaskQueue:         TaskQueue,
 			ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
 		}
-		workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, cwo), RecordProcessorWorkflow, recordID, parentID)
+		future := workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, cwo), RecordProcessorWorkflow, recordID, parentID)
+		// Wait for the child to be started so the command is committed before any ContinueAsNew.
+		return future.GetChildWorkflowExecution().Get(ctx, nil)
 	}
 
 	// Only start (windowSize - inFlight) new children. Carried-over in-flight
@@ -65,7 +67,9 @@ func SlidingWindowWorkflow(ctx workflow.Context, input SlidingWindowInput) (int,
 	}
 	nextIndex := startIndex
 	for i := 0; i < newFill; i++ {
-		startChild(recordIDs[nextIndex])
+		if err := startChild(recordIDs[nextIndex]); err != nil {
+			return 0, err
+		}
 		nextIndex++
 		dispatched++
 		active++
@@ -91,7 +95,9 @@ func SlidingWindowWorkflow(ctx workflow.Context, input SlidingWindowInput) (int,
 		totalProcessed++
 		active--
 
-		startChild(recordIDs[nextIndex])
+		if err := startChild(recordIDs[nextIndex]); err != nil {
+			return 0, err
+		}
 		nextIndex++
 		dispatched++
 		active++

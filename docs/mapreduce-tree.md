@@ -79,9 +79,10 @@ The following examples show how each SDK implements the MapReduce Tree pattern.
 import {
   condition,
   defineSignal,
-  executeChild,
+  getExternalWorkflowHandle,
   proxyActivities,
   setHandler,
+  startChild,
   workflowInfo,
 } from "@temporalio/workflow";
 import type * as activities from "./activities";
@@ -91,7 +92,12 @@ const { processRecord } = proxyActivities<typeof activities>({
   startToCloseTimeout: "30 seconds",
 });
 
-export const resultSignal = defineSignal<[string, string]>("leafResult");
+interface ResultPayload {
+  id: string;
+  results: string[];
+}
+
+export const resultSignal = defineSignal<[ResultPayload]>("leafResult");
 
 export async function leafWorkflow(
   record: string,
@@ -99,14 +105,9 @@ export async function leafWorkflow(
 ): Promise<void> {
   const result = await processRecord(record);
   // Signal result back to parent node.
-  await executeChild(signalProxy, {
-    workflowId: parentWorkflowId,
-    args: [record, result],
-  });
+  const parent = getExternalWorkflowHandle(parentWorkflowId);
+  await parent.signal(resultSignal, { id: record, results: [result] });
 }
-
-// Placeholder — in real usage call signalExternalWorkflow / getExternalWorkflowHandle.
-async function signalProxy(_record: string, _result: string): Promise<void> {}
 
 export async function nodeWorkflow(
   records: string[],
@@ -118,48 +119,49 @@ export async function nodeWorkflow(
   }
 
   const myId = workflowInfo().workflowId;
-  const results: string[] = [];
+  const collectedResults: string[] = [];
   let received = 0;
+  let expected = 0;
 
-  setHandler(resultSignal, (_record: string, result: string) => {
-    results.push(result);
+  setHandler(resultSignal, (payload: ResultPayload) => {
+    collectedResults.push(...payload.results);
     received++;
   });
 
   if (records.length <= LEAF_THRESHOLD) {
     // Start one leaf per record.
+    expected = records.length;
     for (const record of records) {
-      executeChild(leafWorkflow, {
+      void startChild(leafWorkflow, {
         args: [record, myId],
         workflowId: `${myId}/leaf-${record}`,
         taskQueue: TASK_QUEUE,
       });
     }
-    await condition(() => received === records.length);
   } else {
     // Split and recurse.
     const mid = Math.floor(records.length / 2);
     const chunks = [records.slice(0, mid), records.slice(mid)];
-
+    expected = chunks.length;
     for (let i = 0; i < chunks.length; i++) {
-      executeChild(nodeWorkflow, {
+      void startChild(nodeWorkflow, {
         args: [chunks[i], depth + 1, myId],
         workflowId: `${myId}/node-d${depth + 1}-${i}`,
         taskQueue: TASK_QUEUE,
       });
     }
-    await condition(() => received === chunks.length);
   }
 
-  // Signal aggregated result up to parent.
+  // Wait until all expected signals have arrived.
+  await condition(() => received >= expected);
+
+  // Signal aggregated results up to parent (if this is not the root).
   if (parentWorkflowId) {
-    await executeChild(signalProxy, {
-      workflowId: parentWorkflowId,
-      args: [myId, results.join(",")],
-    });
+    const parent = getExternalWorkflowHandle(parentWorkflowId);
+    await parent.signal(resultSignal, { id: myId, results: collectedResults });
   }
 
-  return results;
+  return collectedResults;
 }
 ```
 
@@ -246,6 +248,8 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
+
 	"go.temporal.io/sdk/workflow"
 )
 

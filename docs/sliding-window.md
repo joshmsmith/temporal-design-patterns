@@ -66,10 +66,10 @@ import {
   condition,
   continueAsNew,
   defineSignal,
-  executeChild,
   getExternalWorkflowHandle,
   proxyActivities,
   setHandler,
+  startChild,
   workflowInfo,
 } from "@temporalio/workflow";
 import type * as activities from "./activities";
@@ -119,7 +119,7 @@ export async function slidingWindowWorkflow(input: SlidingWindowInput): Promise<
   // children from the previous run will signal us when they complete.
   const newFill = Math.min(windowSize - inFlight, recordIds.length - startIndex);
   for (let i = 0; i < newFill; i++) {
-    executeChild(recordProcessorWorkflow, {
+    await startChild(recordProcessorWorkflow, {
       args: [recordIds[nextIndex], parentId],
       workflowId: `${parentId}/record-${recordIds[nextIndex]}`,
       taskQueue: TASK_QUEUE,
@@ -130,12 +130,18 @@ export async function slidingWindowWorkflow(input: SlidingWindowInput): Promise<
     active++;
   }
 
-  // As slots free up, start the next child.
+  // If the window is full after the initial fill, continue-as-new immediately.
+  if (dispatched >= windowSize) {
+    await continueAsNew<typeof slidingWindowWorkflow>({ recordIds, windowSize, startIndex: nextIndex, totalProcessed, inFlight: windowSize });
+    return;
+  }
+
+  // Slide the window: as each slot frees, start the next child.
   while (nextIndex < recordIds.length) {
     await condition(() => pendingSignals > 0);
     pendingSignals--;
     active--;
-    executeChild(recordProcessorWorkflow, {
+    await startChild(recordProcessorWorkflow, {
       args: [recordIds[nextIndex], parentId],
       workflowId: `${parentId}/record-${recordIds[nextIndex]}`,
       taskQueue: TASK_QUEUE,
@@ -155,6 +161,7 @@ export async function slidingWindowWorkflow(input: SlidingWindowInput): Promise<
         totalProcessed,
         inFlight: windowSize,
       });
+      return;
     }
   }
 
@@ -208,7 +215,7 @@ class SlidingWindowWorkflow:
 
     @workflow.run
     async def run(self, input: SlidingWindowInput) -> int:
-        self._total_processed = input.total_processed
+        self._total_processed += input.total_processed
         record_ids = input.record_ids
         window_size = input.window_size
         start_index = input.start_index
@@ -270,6 +277,9 @@ package main
 
 import (
 	"strings"
+	"time"
+
+	enums "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -301,16 +311,18 @@ func SlidingWindowWorkflow(ctx workflow.Context, input SlidingWindowInput) (int,
 
 	completedCh := workflow.GetSignalChannel(ctx, CompletionSignal)
 	nextIndex := input.StartIndex
+	totalProcessed := input.TotalProcessed
 	dispatched := 0
 	active := input.InFlight
 
-	startChild := func(recordID string) {
+	startChild := func(recordID string) error {
 		cwo := workflow.ChildWorkflowOptions{
 			WorkflowID:        parentID + "/record-" + recordID,
 			TaskQueue:         TaskQueue,
 			ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
 		}
-		workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, cwo), RecordProcessorWorkflow, recordID, parentID)
+		future := workflow.ExecuteChildWorkflow(workflow.WithChildOptions(ctx, cwo), RecordProcessorWorkflow, recordID, parentID)
+		return future.GetChildWorkflowExecution().Get(ctx, nil)
 	}
 
 	// Only start (windowSize - inFlight) new children. Carried-over in-flight
@@ -320,10 +332,23 @@ func SlidingWindowWorkflow(ctx workflow.Context, input SlidingWindowInput) (int,
 		newFill = windowSize - input.InFlight
 	}
 	for i := 0; i < newFill; i++ {
-		startChild(recordIDs[nextIndex])
+		if err := startChild(recordIDs[nextIndex]); err != nil {
+			return totalProcessed, err
+		}
 		nextIndex++
 		dispatched++
 		active++
+	}
+
+	// If the window is full after the initial fill, continue-as-new immediately.
+	if dispatched >= windowSize {
+		return 0, workflow.NewContinueAsNewError(ctx, SlidingWindowWorkflow, SlidingWindowInput{
+			RecordIDs:      recordIDs,
+			WindowSize:     windowSize,
+			StartIndex:     nextIndex,
+			TotalProcessed: totalProcessed,
+			InFlight:       windowSize,
+		})
 	}
 
 	// Slide the window.
@@ -331,7 +356,9 @@ func SlidingWindowWorkflow(ctx workflow.Context, input SlidingWindowInput) (int,
 		workflow.GetSignalChannel(ctx, CompletionSignal).Receive(ctx, nil)
 		totalProcessed++
 		active--
-		startChild(recordIDs[nextIndex])
+		if err := startChild(recordIDs[nextIndex]); err != nil {
+			return totalProcessed, err
+		}
 		nextIndex++
 		dispatched++
 		active++

@@ -75,7 +75,7 @@ export async function slidingWindowWorkflow(input: SlidingWindowInput): Promise<
   let active = inFlight;
 
   for (let i = 0; i < newFill; i++) {
-    void startChild(recordProcessorWorkflow, {
+    await startChild(recordProcessorWorkflow, {
       args: [recordIds[nextIndex], parentId],
       workflowId: `${parentId}/record-${recordIds[nextIndex]}`,
       taskQueue: TASK_QUEUE,
@@ -99,7 +99,7 @@ export async function slidingWindowWorkflow(input: SlidingWindowInput): Promise<
     await condition(() => pendingSignals > 0);
     pendingSignals--;
     active--;
-    void startChild(recordProcessorWorkflow, {
+    await startChild(recordProcessorWorkflow, {
       args: [recordIds[nextIndex], parentId],
       workflowId: `${parentId}/record-${recordIds[nextIndex]}`,
       taskQueue: TASK_QUEUE,
