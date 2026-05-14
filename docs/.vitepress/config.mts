@@ -34,7 +34,8 @@ export default withMermaid(defineConfig({
         items: [
           { text: 'Overview', link: '/workflow-messaging-patterns' },
           { text: 'Signal with Start', link: '/signal-with-start' },
-          { text: 'Request-Response via Updates', link: '/request-response-via-updates' }
+          { text: 'Request-Response via Updates', link: '/request-response-via-updates' },
+          { text: 'Event Accumulator', link: '/event-accumulator' }
         ]
       },
       {
