@@ -338,13 +338,13 @@ Producers in all SDKs call Signal-With-Start to atomically start the workflow if
 
 ## When to use
 
-The Accumulator pattern is well suited when events for the same entity arrive from multiple producers and must be processed together as a batch, when downstream systems perform better with batched calls rather than one call per event, and when at-least-once event delivery makes deduplication necessary at the collection layer.
+The Accumulator pattern is well suited when events related to the same entity or group arrive from multiple producers and can be processed together as in batches or groups, when downstream systems prefer batched calls rather than one call per event, and when at-least-once event delivery makes deduplication necessary at the collection layer.
 
-It is not a good fit for use cases that require processing every event individually in strict order, for cases where the batch size is known in advance and all events arrive within a short deterministic window (a standard workflow is sufficient), or when events for different keys must be correlated at processing time (consider fan-in with Child Workflows instead).
+It is not a good fit for use cases that require processing every event individually in _strict order_, for cases where the batch size is known in advance and all events arrive within a short deterministic window (a standard workflow is sufficient), or when events for different keys must be correlated at processing time (consider fan-in with e.g. Child Workflows or multiple levels of Accumulator).
 
 ## Benefits and trade-offs
 
-The Accumulator pattern reduces downstream load by consolidating many individual events into a single batch call.
+The Accumulator pattern reduces and simplifies downstream load by consolidating many individual events into a accumulated data element and activity call.
 Signal-With-Start eliminates client-side coordination logic for starting or locating the collector workflow.
 Temporal's durable execution guarantees that accumulated state survives Worker restarts, and Continue-As-New prevents history growth from becoming a long-term problem.
 
