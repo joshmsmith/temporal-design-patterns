@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, TimeoutError, TimeoutType
 
 with workflow.unsafe.imports_passed_through():
     import activities
@@ -23,9 +23,11 @@ class PaymentAuthWorkflow:
                     backoff_coefficient=1.0,
                 ),
             )
-        except ActivityError:
-            workflow.logger.error(
-                "Authorization failed — 12-second SLA breached",
-                extra={"transaction_id": transaction_id},
-            )
+        except ActivityError as e:
+            cause = e.__cause__
+            if isinstance(cause, TimeoutError) and cause.type == TimeoutType.SCHEDULE_TO_CLOSE:
+                workflow.logger.error(
+                    "Authorization failed — 12-second SLA breached",
+                    extra={"transaction_id": transaction_id},
+                )
             return f"Transaction {transaction_id}: SLA breached — authorization failed"

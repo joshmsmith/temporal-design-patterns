@@ -70,20 +70,22 @@ from temporalio.exceptions import ApplicationError
 
 @activity.defn
 async def process_order(order_id: str) -> str:
-    order = await db.get_order(order_id)
-    if order is None:
+    response = await http_client.post(f"/orders/{order_id}/process")
+    if response.status_code == 404:
         raise ApplicationError(
             f"Order {order_id} not found",
             type="OrderNotFoundError",
             non_retryable=True,
         )
-    if not order.is_valid():
+    if response.status_code == 422:
         raise ApplicationError(
-            f"Order {order_id} failed validation: {order.validation_errors}",
+            f"Order {order_id} rejected: {response.json().get('detail', 'validation error')}",
             type="ValidationError",
             non_retryable=True,
         )
-    return await payment_service.charge(order)
+
+    response.raise_for_status()
+    return response.json()["confirmation_id"]
 ```
 
 ```go [Go]
@@ -98,22 +100,25 @@ import (
 )
 
 func ProcessOrder(ctx context.Context, orderID string) (string, error) {
-    order, err := db.GetOrder(orderID)
-    if err != nil || order == nil {
+    resp, err := httpClient.Post(fmt.Sprintf("/orders/%s/process", orderID))
+    if err != nil {
+        return "", err
+    }
+    if resp.StatusCode == 404 {
         return "", temporal.NewNonRetryableApplicationError(
             fmt.Sprintf("order %s not found", orderID),
             "OrderNotFoundError",
-            err,
+            nil,
         )
     }
-    if !order.IsValid() {
+    if resp.StatusCode == 422 {
         return "", temporal.NewNonRetryableApplicationError(
-            fmt.Sprintf("order %s failed validation: %v", orderID, order.ValidationErrors()),
+            fmt.Sprintf("order %s rejected: %s", orderID, resp.ErrorDetail),
             "ValidationError",
             nil,
         )
     }
-    return paymentService.Charge(order)
+    return resp.ConfirmationID, nil
 }
 ```
 
@@ -124,20 +129,20 @@ import io.temporal.failure.ApplicationFailure;
 public class ProcessOrderActivityImpl implements ProcessOrderActivity {
     @Override
     public String processOrder(String orderId) {
-        Order order = db.getOrder(orderId);
-        if (order == null) {
+        HttpResponse response = httpClient.post("/orders/" + orderId + "/process");
+        if (response.getStatusCode() == 404) {
             throw ApplicationFailure.newNonRetryableFailure(
                 "Order " + orderId + " not found",
                 "OrderNotFoundError"
             );
         }
-        if (!order.isValid()) {
+        if (response.getStatusCode() == 422) {
             throw ApplicationFailure.newNonRetryableFailure(
-                "Order " + orderId + " failed validation: " + order.getValidationErrors(),
+                "Order " + orderId + " rejected: " + response.getErrorDetail(),
                 "ValidationError"
             );
         }
-        return paymentService.charge(order);
+        return response.getConfirmationId();
     }
 }
 ```
@@ -147,20 +152,24 @@ public class ProcessOrderActivityImpl implements ProcessOrderActivity {
 import { ApplicationFailure } from '@temporalio/activity';
 
 export async function processOrder(orderId: string): Promise<string> {
-    const order = await db.getOrder(orderId);
-    if (!order) {
+    const response = await fetch(`/orders/${orderId}/process`, { method: 'POST' });
+    if (response.status === 404) {
         throw ApplicationFailure.nonRetryable(
             `Order ${orderId} not found`,
             'OrderNotFoundError',
         );
     }
-    if (!order.isValid()) {
+    if (response.status === 422) {
+        const body = await response.json();
         throw ApplicationFailure.nonRetryable(
-            `Order ${orderId} failed validation: ${order.validationErrors}`,
+            `Order ${orderId} rejected: ${body.detail ?? 'validation error'}`,
             'ValidationError',
         );
     }
-    return paymentService.charge(order);
+
+    if (!response.ok) throw new Error(`API error ${response.status}`);
+    const body = await response.json();
+    return body.confirmation_id;
 }
 ```
 :::
@@ -170,6 +179,88 @@ export async function processOrder(orderId: string): Promise<string> {
 Alternatively, list error type names in the `RetryPolicy` at the Workflow call site.
 Temporal stops retrying when the Activity raises an error whose type matches any name in the list.
 This approach separates the retry decision from the Activity code, which is useful when the Activity is shared and the non-retryable classification depends on the caller's context.
+
+The Activity raises a standard `ApplicationError` with a type name but without the non-retryable flag — the retry decision is delegated to the Workflow's `RetryPolicy`:
+
+::: code-group
+```python [Python]
+# activities.py
+@activity.defn
+async def process_order(order_id: str) -> str:
+    response = await http_client.post(f"/orders/{order_id}/process")
+    if response.status_code == 404:
+        # No non_retryable=True — the RetryPolicy in the Workflow controls retry behavior
+        raise ApplicationError(f"Order {order_id} not found", type="OrderNotFoundError")
+    if response.status_code == 422:
+        raise ApplicationError(
+            f"Order {order_id} rejected: {response.json().get('detail', 'validation error')}",
+            type="ValidationError",
+        )
+    response.raise_for_status()
+    return response.json()["confirmation_id"]
+```
+
+```go [Go]
+// activities.go
+func ProcessOrder(ctx context.Context, orderID string) (string, error) {
+    resp, err := httpClient.Post(fmt.Sprintf("/orders/%s/process", orderID))
+    if err != nil {
+        return "", err
+    }
+    if resp.StatusCode == 404 {
+        // Use NewApplicationError, not NewNonRetryableApplicationError
+        return "", temporal.NewApplicationError(
+            fmt.Sprintf("order %s not found", orderID), "OrderNotFoundError",
+        )
+    }
+    if resp.StatusCode == 422 {
+        return "", temporal.NewApplicationError(
+            fmt.Sprintf("order %s rejected: %s", orderID, resp.ErrorDetail), "ValidationError",
+        )
+    }
+    return resp.ConfirmationID, nil
+}
+```
+
+```java [Java]
+// ProcessOrderActivityImpl.java
+public String processOrder(String orderId) {
+    HttpResponse response = httpClient.post("/orders/" + orderId + "/process");
+    if (response.getStatusCode() == 404) {
+        // Use newFailure, not newNonRetryableFailure
+        throw ApplicationFailure.newFailure("Order " + orderId + " not found", "OrderNotFoundError");
+    }
+    if (response.getStatusCode() == 422) {
+        throw ApplicationFailure.newFailure(
+            "Order " + orderId + " rejected: " + response.getErrorDetail(), "ValidationError");
+    }
+    return response.getConfirmationId();
+}
+```
+
+```typescript [TypeScript]
+// activities.ts
+export async function processOrder(orderId: string): Promise<string> {
+    const response = await fetch(`/orders/${orderId}/process`, { method: 'POST' });
+    if (response.status === 404) {
+        // Use ApplicationFailure.create, not .nonRetryable
+        throw ApplicationFailure.create({ message: `Order ${orderId} not found`, type: 'OrderNotFoundError' });
+    }
+    if (response.status === 422) {
+        const body = await response.json();
+        throw ApplicationFailure.create({
+            message: `Order ${orderId} rejected: ${body.detail ?? 'validation error'}`,
+            type: 'ValidationError',
+        });
+    }
+    if (!response.ok) throw new Error(`API error ${response.status}`);
+    const body = await response.json();
+    return body.confirmation_id;
+}
+```
+:::
+
+The Workflow lists which error type names to never retry:
 
 ::: code-group
 ```python [Python]

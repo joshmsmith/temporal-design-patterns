@@ -1,4 +1,4 @@
-import { log, proxyActivities } from "@temporalio/workflow";
+import { ActivityFailure, log, proxyActivities, RetryState } from "@temporalio/workflow";
 
 import type * as activities from "./activities";
 
@@ -15,9 +15,9 @@ export async function paymentWorkflow(orderId: string): Promise<string> {
   try {
     return await chargePaymentApi(orderId);
   } catch (err) {
-    log.error("All 3 payment attempts failed — escalating to on-call team", {
-      orderId,
-    });
+    if (err instanceof ActivityFailure && err.retryState === RetryState.MAXIMUM_ATTEMPTS_REACHED) {
+      log.error("All 3 payment attempts failed — escalating to on-call team", { orderId });
+    }
     return `Order ${orderId}: payment failed after 3 attempts — escalated to on-call`;
   }
 }

@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, RetryState
 
 with workflow.unsafe.imports_passed_through():
     import activities
@@ -24,8 +24,9 @@ class PaymentWorkflow:
                 ),
             )
         except ActivityError as e:
-            workflow.logger.error(
-                "All 3 payment attempts failed — escalating to on-call team",
-                extra={"order_id": order_id},
-            )
+            if e.retry_state == RetryState.MAXIMUM_ATTEMPTS_REACHED:
+                workflow.logger.error(
+                    "All 3 payment attempts failed — escalating to on-call team",
+                    extra={"order_id": order_id},
+                )
             return f"Order {order_id}: payment failed after 3 attempts — escalated to on-call"

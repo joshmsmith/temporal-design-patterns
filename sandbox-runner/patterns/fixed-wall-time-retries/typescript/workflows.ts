@@ -1,4 +1,4 @@
-import { log, proxyActivities } from "@temporalio/workflow";
+import { ActivityFailure, log, proxyActivities, TimeoutError, TimeoutType } from "@temporalio/workflow";
 
 import type * as activities from "./activities";
 
@@ -15,7 +15,12 @@ export async function paymentAuthWorkflow(transactionId: string): Promise<string
   try {
     return await authorizeTransaction(transactionId);
   } catch (err) {
-    log.error("Authorization failed — 12-second SLA breached", { transactionId });
+    if (err instanceof ActivityFailure) {
+      const cause = err.cause;
+      if (cause instanceof TimeoutError && cause.type === TimeoutType.SCHEDULE_TO_CLOSE) {
+        log.error("Authorization failed — 12-second SLA breached", { transactionId });
+      }
+    }
     return `Transaction ${transactionId}: SLA breached — authorization failed`;
   }
 }

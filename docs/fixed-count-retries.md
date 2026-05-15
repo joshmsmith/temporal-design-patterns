@@ -70,7 +70,7 @@ The count includes the initial attempt, so `maximum_attempts=3` means one attemp
 from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, RetryState
 import activities
 
 @workflow.defn
@@ -85,9 +85,13 @@ class PaymentWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
         except ActivityError as e:
-            # All retries exhausted — handle the failure here.
-            # Options: alert on-call, trigger a compensation activity, or escalate to a human.
-            workflow.logger.error(f"Payment failed after 3 attempts: {e}")
+            if e.retry_state == RetryState.MAXIMUM_ATTEMPTS_REACHED:
+                # All retries exhausted — handle the failure here.
+                # Options: alert on-call, trigger a compensation activity, or escalate to a human.
+                workflow.logger.error(
+                    "Payment failed: all 3 attempts exhausted",
+                    extra={"order_id": order_id},
+                )
             raise
 ```
 
@@ -96,9 +100,10 @@ class PaymentWorkflow:
 package payments
 
 import (
-    "fmt"
+    "errors"
     "time"
 
+    enumspb "go.temporal.io/api/enums/v1"
     "go.temporal.io/sdk/temporal"
     "go.temporal.io/sdk/workflow"
 )
@@ -115,9 +120,13 @@ func PaymentWorkflow(ctx workflow.Context, orderID string) (string, error) {
     var result string
     err := workflow.ExecuteActivity(ctx, ChargePaymentAPI, orderID).Get(ctx, &result)
     if err != nil {
-        // All retries exhausted — handle the failure here.
-        // Options: alert on-call, trigger a compensation activity, or escalate to a human.
-        workflow.GetLogger(ctx).Error("Payment failed after 3 attempts", "error", err)
+        var actErr *temporal.ActivityError
+        if errors.As(err, &actErr) && actErr.RetryState() == enumspb.RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED {
+            // All retries exhausted — handle the failure here.
+            // Options: alert on-call, trigger a compensation activity, or escalate to a human.
+            workflow.GetLogger(ctx).Error("Payment failed: all 3 attempts exhausted",
+                "orderID", orderID)
+        }
         return "", err
     }
     return result, nil
@@ -127,6 +136,7 @@ func PaymentWorkflow(ctx workflow.Context, orderID string) (string, error) {
 ```java [Java]
 // PaymentWorkflowImpl.java
 import io.temporal.activity.ActivityOptions;
+import io.temporal.api.enums.v1.RetryState;
 import io.temporal.common.RetryOptions;
 import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.Workflow;
@@ -148,9 +158,12 @@ public class PaymentWorkflowImpl implements PaymentWorkflow {
         try {
             return activities.chargePaymentApi(orderId);
         } catch (ActivityFailure e) {
-            // All retries exhausted — handle the failure here.
-            // Options: alert on-call, trigger a compensation activity, or escalate to a human.
-            Workflow.getLogger(getClass()).error("Payment failed after 3 attempts", e);
+            if (e.getRetryState() == RetryState.RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED) {
+                // All retries exhausted — handle the failure here.
+                // Options: alert on-call, trigger a compensation activity, or escalate to a human.
+                Workflow.getLogger(getClass()).error(
+                    "Payment failed: all 3 attempts exhausted: " + orderId, e);
+            }
             throw e;
         }
     }
@@ -171,9 +184,11 @@ export async function paymentWorkflow(orderId: string): Promise<string> {
     try {
         return await chargePaymentApi(orderId);
     } catch (err) {
-        // All retries exhausted — handle the failure here.
-        // Options: alert on-call, trigger a compensation activity, or escalate to a human.
-        wf.log.error('Payment failed after 3 attempts', { error: err });
+        if (err instanceof wf.ActivityFailure && err.retryState === wf.RetryState.MAXIMUM_ATTEMPTS_REACHED) {
+            // All retries exhausted — handle the failure here.
+            // Options: alert on-call, trigger a compensation activity, or escalate to a human.
+            wf.log.error('Payment failed: all 3 attempts exhausted', { orderId });
+        }
         throw err;
     }
 }

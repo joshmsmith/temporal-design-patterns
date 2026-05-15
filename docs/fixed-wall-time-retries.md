@@ -68,7 +68,7 @@ Temporal stops retrying automatically when the budget runs out.
 from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, TimeoutError, TimeoutType
 import activities
 
 @workflow.defn
@@ -87,11 +87,13 @@ class PaymentAuthWorkflow:
                     maximum_interval=timedelta(seconds=30),
                 ),
             )
-        except ActivityError:
-            workflow.logger.error(
-                "Authorization failed — 2-minute SLA breached",
-                extra={"transaction_id": transaction_id},
-            )
+        except ActivityError as e:
+            cause = e.__cause__
+            if isinstance(cause, TimeoutError) and cause.type == TimeoutType.SCHEDULE_TO_CLOSE:
+                workflow.logger.error(
+                    "Authorization failed — 2-minute SLA breached",
+                    extra={"transaction_id": transaction_id},
+                )
             raise
 ```
 
@@ -100,8 +102,10 @@ class PaymentAuthWorkflow:
 package shipment
 
 import (
+    "errors"
     "time"
 
+    enumspb "go.temporal.io/api/enums/v1"
     "go.temporal.io/sdk/temporal"
     "go.temporal.io/sdk/workflow"
 )
@@ -121,11 +125,13 @@ func PaymentAuthWorkflow(ctx workflow.Context, transactionID string) (string, er
     var result string
     err := workflow.ExecuteActivity(ctx, AuthorizeTransaction, transactionID).Get(ctx, &result)
     if err != nil {
-        workflow.GetLogger(ctx).Error(
-            "Authorization failed — 2-minute SLA breached",
-            "transactionID", transactionID,
-            "error", err,
-        )
+        var timeoutErr *temporal.TimeoutError
+        if errors.As(err, &timeoutErr) && timeoutErr.TimeoutType() == enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE {
+            workflow.GetLogger(ctx).Error(
+                "Authorization failed — 2-minute SLA breached",
+                "transactionID", transactionID,
+            )
+        }
         return "", err
     }
     return result, nil
@@ -135,8 +141,10 @@ func PaymentAuthWorkflow(ctx workflow.Context, transactionID string) (string, er
 ```java [Java]
 // ShipmentNotificationWorkflowImpl.java
 import io.temporal.activity.ActivityOptions;
+import io.temporal.api.enums.v1.TimeoutType;
 import io.temporal.common.RetryOptions;
 import io.temporal.failure.ActivityFailure;
+import io.temporal.failure.TimeoutFailure;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 
@@ -159,9 +167,12 @@ public class PaymentAuthWorkflowImpl implements PaymentAuthWorkflow {
         try {
             return activities.authorizeTransaction(transactionId);
         } catch (ActivityFailure e) {
-            Workflow.getLogger(getClass()).error(
-                "Authorization failed — 2-minute SLA breached: " + transactionId, e
-            );
+            if (e.getCause() instanceof TimeoutFailure tf
+                    && tf.getTimeoutType() == TimeoutType.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE) {
+                Workflow.getLogger(getClass()).error(
+                    "Authorization failed — 2-minute SLA breached: " + transactionId, e
+                );
+            }
             throw e;
         }
     }
@@ -187,10 +198,12 @@ export async function paymentAuthWorkflow(transactionId: string): Promise<string
     try {
         return await authorizeTransaction(transactionId);
     } catch (err) {
-        wf.log.error('Authorization failed — 2-minute SLA breached', {
-            transactionId,
-            error: err,
-        });
+        if (err instanceof wf.ActivityFailure) {
+            const cause = err.cause;
+            if (cause instanceof wf.TimeoutError && cause.type === wf.TimeoutType.SCHEDULE_TO_CLOSE) {
+                wf.log.error('Authorization failed — 2-minute SLA breached', { transactionId });
+            }
+        }
         throw err;
     }
 }
@@ -255,10 +268,11 @@ const { authorizeTransaction } = wf.proxyActivities<typeof activities>({
 - **Set both timeouts for clarity.** Use `ScheduleToCloseTimeout` as the total SLA and `StartToCloseTimeout` as a per-attempt safety valve. Omitting `StartToCloseTimeout` means a single slow response can consume the entire budget.
 - **Cap `MaximumInterval` well below the SLA.** If `MaximumInterval` is 2 hours and the SLA is 24 hours, only 12 retries are possible. Tune the interval so the backoff plateaus at a value that allows meaningful retries within the budget.
 - **Handle `ActivityError` explicitly.** When the SLA expires, Temporal delivers an error to the Workflow. Catch it to send an alert, trigger a compensation, or record a breach in an audit log.
-- **Distinguish SLA breaches from transient errors.** Inspect the error cause — a `ScheduleToCloseTimeout` breach has a specific error type that differs from an Activity application failure.
+- **Distinguish SLA breaches from transient errors.** Inspect the error cause — check that the `ActivityError`'s cause is a `TimeoutError` with `TimeoutType.SCHEDULE_TO_CLOSE` (Python/TypeScript) or `TIMEOUT_TYPE_SCHEDULE_TO_CLOSE` (Go/Java) to separate an SLA breach from an application failure. This lets you log or alert specifically on SLA violations rather than treating all activity errors the same way.
 
 ## Common pitfalls
 
+- **Not accounting for `ScheduleToStart` delay in the budget.** `ScheduleToCloseTimeout` begins when the Activity is first scheduled, which includes the time the task waits in the queue before a Worker picks it up. Under high load or insufficient Worker capacity, tasks can sit in the queue for seconds or minutes before the first attempt starts — consuming SLA budget before any work is done. Provision Workers with enough capacity for peak traffic, or use autoscaling, to keep `ScheduleToStart` latency negligible relative to the SLA window.
 - **Using `StartToCloseTimeout` alone for SLA enforcement.** A downstream system that responds slowly but never fully times out can keep resetting the per-attempt clock indefinitely.
 - **Setting `ScheduleToCloseTimeout` shorter than `StartToCloseTimeout`.** If the total budget is shorter than a single attempt's maximum, the Activity will never complete — Temporal will cancel it before it finishes.
 - **Ignoring the breach in the Workflow.** Letting the `ActivityError` propagate without handling it means SLA breaches go unlogged and uncompensated.
