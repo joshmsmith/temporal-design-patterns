@@ -2,7 +2,7 @@
 
 > **Warning:** This catalog is under active development. Content and structure may change.
 >
-> **Personal project by [@taonic](https://github.com/taonic).**
+> Created by the Temporal Solution Architecture team. For questions, see the authors in the [Contributors](#contributors) section below.
 >
 
 A catalog of design patterns for Temporal Workflows.
@@ -87,3 +87,5 @@ The site deploys to GitHub Pages automatically when you push changes to the main
 
 - [@taonic](https://github.com/taonic)
 - [@darshitvvora](https://github.com/darshitvvora)
+- [@joshmsmith](https://github.com/joshmsmith)
+- [@lainecsmith](https://github.com/lainecsmith)

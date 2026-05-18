@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+
 import { Client, Connection } from "@temporalio/client";
 
 import {
@@ -20,6 +22,14 @@ async function waitForStatus(
 }
 
 async function main(): Promise<void> {
+  // Register the TransferStatus search attribute (idempotent — ignored if already exists).
+  try {
+    execSync(
+      "temporal operator search-attribute create --name TransferStatus --type Keyword",
+      { stdio: "pipe" },
+    );
+  } catch { /* already registered */ }
+
   const connection = await Connection.connect();
   try {
     const client = new Client({ connection });

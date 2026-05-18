@@ -2,12 +2,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, SearchAttributeKey
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     import activities
     from shared import TransferInput
+
+TRANSFER_STATUS_KEY = SearchAttributeKey.for_keyword("TransferStatus")
 
 
 @workflow.defn
@@ -36,8 +38,10 @@ class TransferWorkflow:
                 correction_attempts += 1
                 if correction_attempts > 5:
                     self._status = "FAILED"
+                    workflow.upsert_search_attributes([TRANSFER_STATUS_KEY.value_set(self._status)])
                     raise
                 self._status = "AWAITING_CORRECTION"
+                workflow.upsert_search_attributes([TRANSFER_STATUS_KEY.value_set(self._status)])
                 workflow.logger.warning(
                     "Transfer failed — waiting for account correction",
                     extra={"to_account": account},

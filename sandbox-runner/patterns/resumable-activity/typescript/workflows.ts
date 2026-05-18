@@ -5,6 +5,7 @@ import {
   log,
   proxyActivities,
   setHandler,
+  upsertSearchAttributes,
 } from "@temporalio/workflow";
 
 import type * as activities from "./activities";
@@ -48,9 +49,11 @@ export async function transferWorkflow(
       correctionCount++;
       if (correctionCount > 5) {
         status = "FAILED";
+        upsertSearchAttributes({ TransferStatus: [status] });
         throw new Error("Too many correction attempts — workflow failed");
       }
       status = "AWAITING_CORRECTION";
+      upsertSearchAttributes({ TransferStatus: [status] });
       log.warn("Transfer failed — waiting for account correction", { account });
       // Park until the admin sends a correction signal
       await condition(() => correctedAccount !== undefined);

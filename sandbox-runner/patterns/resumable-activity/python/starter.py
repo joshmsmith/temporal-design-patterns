@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import time
 
 from temporalio.client import Client
@@ -17,6 +18,12 @@ async def wait_for_status(handle: object, target_status: str) -> None:
 
 
 async def main() -> None:
+    # Register the TransferStatus search attribute (idempotent — ignored if already exists).
+    subprocess.run(
+        ["temporal", "operator", "search-attribute", "create",
+         "--name", "TransferStatus", "--type", "Keyword"],
+        capture_output=True,
+    )
     client = await Client.connect("localhost:7233")
     workflow_id = f"{WORKFLOW_ID_PREFIX}-{int(time.time() * 1000)}"
 

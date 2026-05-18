@@ -90,9 +90,11 @@ Signal handlers set the fields, and `wait_condition` blocks until they are non-n
 from dataclasses import dataclass
 from datetime import timedelta
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, SearchAttributeKey
 from temporalio.exceptions import ActivityError
 import activities
+
+TRANSFER_STATUS_KEY = SearchAttributeKey.for_keyword("TransferStatus")
 
 @dataclass
 class TransferInput:
@@ -126,8 +128,10 @@ class TransferWorkflow:
                 correction_attempts += 1
                 if correction_attempts > 5:
                     self._status = "FAILED"
+                    workflow.upsert_search_attributes([TRANSFER_STATUS_KEY.value_set(self._status)])
                     raise
                 self._status = "AWAITING_CORRECTION"
+                workflow.upsert_search_attributes([TRANSFER_STATUS_KEY.value_set(self._status)])
                 workflow.logger.warning(
                     "Transfer failed — waiting for account correction",
                     extra={"to_account": account},
@@ -211,11 +215,13 @@ func TransferWorkflow(ctx workflow.Context, input TransferInput) (string, error)
         }
 
         correctionCount++
-        if correctionCount > 5 {
+        if correctionCount > 5 { // for long correction cycles, consider Continue As New
             status = "FAILED"
+            _ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{"TransferStatus": status})
             return "", err
         }
         status = "AWAITING_CORRECTION"
+        _ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{"TransferStatus": status})
         workflow.GetLogger(ctx).Warn("Transfer failed — waiting for account correction",
             "to_account", account)
 
@@ -246,6 +252,7 @@ func TransferWorkflow(ctx workflow.Context, input TransferInput) (string, error)
 // TransferWorkflowImpl.java
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.common.SearchAttributeKey;
 import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.SignalMethod;
 import io.temporal.workflow.QueryMethod;
@@ -287,7 +294,7 @@ public class TransferWorkflowImpl implements TransferWorkflow {
     @Override
     public String run(TransferInput input) {
         String account = input.getToAccount();
-        int correctionCount = 0;
+        int correctionCount = 0; 
 
         while (true) {
             status = "TRANSFERRING";
@@ -298,11 +305,17 @@ public class TransferWorkflowImpl implements TransferWorkflow {
                 break; // Activity succeeded — exit the correction loop
             } catch (ActivityFailure e) {
                 correctionCount++;
-                if (correctionCount > 5) {
+                if (correctionCount > 5) { // for long correction cycles, consider Continue As New
                     status = "FAILED";
+                    Workflow.upsertTypedSearchAttributes(
+                        SearchAttributeKey.forKeyword("TransferStatus").valueSet(status)
+                    );
                     throw e;
                 }
                 status = "AWAITING_CORRECTION";
+                Workflow.upsertTypedSearchAttributes(
+                    SearchAttributeKey.forKeyword("TransferStatus").valueSet(status)
+                );
                 Workflow.getLogger(getClass()).warn(
                     "Transfer failed — waiting for account correction: " + account
                 );
@@ -386,9 +399,11 @@ export async function transferWorkflow(input: TransferInput): Promise<string> {
             correctionCount++;
             if (correctionCount > 5) {
                 status = 'FAILED';
+                wf.upsertSearchAttributes({ TransferStatus: [status] });
                 throw err;
             }
             status = 'AWAITING_CORRECTION';
+            wf.upsertSearchAttributes({ TransferStatus: [status] });
             wf.log.warn('Transfer failed — waiting for account correction', { account });
             // Park until the admin sends a correction signal
             await wf.condition(() => correctedAccount !== undefined);
@@ -429,6 +444,53 @@ temporal workflow signal \
   --input 'true'
 ```
 
+### Activity implementation
+
+The `executeTransfer` Activity must distinguish between permanent failures — such as an invalid account number — and transient failures that Temporal should retry automatically.
+Throw a non-retryable `ApplicationFailure` for permanent input errors so the Workflow catches the `ActivityError` immediately and transitions to `AWAITING_CORRECTION` instead of exhausting all retry attempts first.
+Let all other exceptions propagate so the RetryPolicy handles transient failures.
+
+::: code-group
+```python [Python]
+# activities.py
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
+@activity.defn
+async def execute_transfer(transfer: TransferInput) -> str:
+    # Non-retryable: bad account number requires a human correction, not a retry.
+    if not await account_service.exists(transfer.to_account):
+        raise ApplicationError(
+            f"Account {transfer.to_account} not found",
+            type="AccountNotFoundError",
+            non_retryable=True,
+        )
+    # Other exceptions propagate as retryable so the RetryPolicy handles them.
+    return await payment_service.transfer(
+        transfer.from_account, transfer.to_account, transfer.amount
+    )
+```
+
+```typescript [TypeScript]
+// activities.ts
+import { ApplicationFailure } from '@temporalio/activity';
+import type { TransferInput } from './workflows';
+
+export async function executeTransfer(transfer: TransferInput): Promise<string> {
+    // Non-retryable: bad account number requires a human correction, not a retry.
+    const accountExists = await accountService.exists(transfer.toAccount);
+    if (!accountExists) {
+        throw ApplicationFailure.nonRetryable(
+            `Account ${transfer.toAccount} not found`,
+            'AccountNotFoundError',
+        );
+    }
+    // Other exceptions propagate as retryable so the RetryPolicy handles them.
+    return paymentService.transfer(transfer.fromAccount, transfer.toAccount, transfer.amount);
+}
+```
+:::
+
 ## State Diagram
 
 The Workflow transitions through a well-defined set of states.
@@ -452,10 +514,10 @@ stateDiagram-v2
 ## Best practices
 
 - **Use a bounded `MaximumAttempts` before parking.** Allow a few automatic retries to recover from transient failures. Parking immediately on the first failure forces operators to intervene for problems that would have resolved on their own.
-- **Cap the correction loop.** Each correction cycle — park, receive signal, re-execute Activity — adds events to the Workflow history (signal received, state transitions, Activity scheduled/completed). Bound the loop to a small number of attempts (the examples use 5) and fail the Workflow explicitly if exceeded, rather than allowing unbounded growth from a stream of bad corrections.
+- **Manage history growth in long-running correction loops.** Each correction cycle — park, receive signal, re-execute Activity — adds events to the Workflow history (signal received, state transitions, Activity scheduled/completed). For workflows that may receive many corrections over time, use [Continue-As-New](continue-as-new.md) to carry the current state into a fresh execution before the history grows too large, rather than relying solely on an arbitrary correction counter.
 - **Expose status via a Query method.** The `getStatus` Query gives operations tooling visibility into where the Workflow is parked without requiring access to the Workflow history.
 - **Validate the correction in the Signal handler.** Check that the corrected account is non-empty and matches the expected format before setting the state. An invalid correction just parks the Workflow again, but a clear error message helps operators.
-- **Log at every state transition.** The `AWAITING_CORRECTION` and `AWAITING_APPROVAL` states can last hours or days. Structured log lines at each transition make the audit trail clear.
+- **Log and record state at every transition.** The `AWAITING_CORRECTION` and `AWAITING_APPROVAL` states can last hours or days. Structured log lines at each transition make the audit trail clear. For operational visibility, also update a [Search Attribute](https://docs.temporal.io/visibility) at each transition (for example, a `Keyword` attribute storing the current status) so operators can filter and query workflows by state directly from the Temporal UI or CLI.
 - **Notify the operator proactively.** The `AWAITING_CORRECTION` transition is a good point to send an alert — an email, a Slack message, or a ticket — rather than waiting for the operator to notice in the Temporal UI.
 - **Distinguish this from the Approval pattern.** The [Approval](approval.md) pattern gates forward progress on a human decision. This pattern recovers from failure with a human-supplied data correction. Both use Signals and `wait_condition`, but serve different roles in a process.
 

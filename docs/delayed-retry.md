@@ -10,8 +10,6 @@ Throw an `ApplicationFailure` with `nextRetryDelay` set inside the Activity to *
 The Delayed Retry pattern overrides the next retry interval for a specific failure by throwing an `ApplicationFailure` with a `nextRetryDelay` field set from inside the Activity.
 Use it when a particular error carries information about how long to wait before retrying — such as a rate-limit response with a `Retry-After` header, or a known maintenance window with a fixed end time.
 
-> **SDK availability:** `nextRetryDelay` is supported in the **Java**, **TypeScript**, and **Rust** SDKs. 
-
 ## Problem
 
 A `RetryPolicy` applies a single backoff schedule to all failures from an Activity.
@@ -21,8 +19,8 @@ This works well for generic transient errors, but some errors carry specific inf
 - A downstream system returns an error message saying "maintenance until 02:00 UTC" — a precise, known delay.
 - A database error includes a lock timeout duration that indicates when the resource will be available.
 
-With a global `RetryPolicy`, you have two bad options: set a short interval and retry too early (wasting quota and adding load), or set a long interval and wait longer than necessary.
-What you need is to set the next retry delay *per failure*, based on the information the error itself provides.
+With a global `RetryPolicy`, you have two options, neither of which is what you need: set a short interval and retry too early (wasting quota and adding load), or set a long interval and wait longer than necessary.
+What you need is to set the next retry delay *specific to this failure*, based on the information the error itself provides.
 
 ## Solution
 
@@ -75,13 +73,16 @@ public class RateLimitedActivityImpl implements RateLimitedActivity {
         ApiResponse response = httpClient.get(endpoint);
 
         if (response.getStatusCode() == 429) {
-            int retryAfterSeconds = response.getHeaderInt("Retry-After", 60);
-            throw ApplicationFailure.newFailureWithCauseAndDelay(
-                "Rate limited — retrying after " + retryAfterSeconds + "s",
-                "RateLimitError",
-                null,
-                Duration.ofSeconds(retryAfterSeconds)
-            );
+            int retryAfterSeconds = response.getHeaderInt("Retry-After", 0);
+            if (retryAfterSeconds > 0) {
+                throw ApplicationFailure.newFailureWithCauseAndDelay(
+                    "Rate limited — retrying after " + retryAfterSeconds + "s",
+                    "RateLimitError",
+                    null,
+                    Duration.ofSeconds(retryAfterSeconds)
+                );
+            }
+            throw ApplicationFailure.newFailure("Rate limited — retrying per RetryPolicy", "RateLimitError");
         }
 
         return response.getBody();
@@ -97,11 +98,15 @@ export async function callApi(endpoint: string): Promise<string> {
     const response = await fetch(endpoint);
 
     if (response.status === 429) {
-        const retryAfter = parseInt(response.headers.get('Retry-After') ?? '60', 10);
+        const retryAfterHeader = response.headers.get('Retry-After');
+        const retryAfterSeconds = retryAfterHeader != null ? parseInt(retryAfterHeader, 10) : undefined;
         throw ApplicationFailure.create({
-            message: `Rate limited — retrying after ${retryAfter}s`,
+            message: retryAfterSeconds != null
+                ? `Rate limited — retrying after ${retryAfterSeconds}s`
+                : 'Rate limited — retrying per RetryPolicy',
             type: 'RateLimitError',
-            nextRetryDelay: `${retryAfter}s`,
+            // Only override the interval when the header is present; fall back to RetryPolicy otherwise
+            nextRetryDelay: retryAfterSeconds != null ? `${retryAfterSeconds}s` : undefined,
         });
     }
 
@@ -215,16 +220,14 @@ export async function apiWorkflow(endpoint: string): Promise<string> {
 
 - **Use the error's own delay information when available.** HTTP 429 `Retry-After`, database lock timeouts, and API-provided backoff hints are more accurate than any value you could configure statically.
 - **Fall back to the RetryPolicy for unknown errors.** Only set `nextRetryDelay` for error types where you have reliable delay information. Let the RetryPolicy handle all other failures normally.
-- **Still set a meaningful RetryPolicy.** `nextRetryDelay` overrides a single retry interval; the RetryPolicy governs everything else — maximum attempts, schedule-to-close timeout, and fallback intervals.
-- **Log the override.** When setting a non-standard delay, log the delay value and its source (e.g., the `Retry-After` header value) so the Workflow history and your logging backend show why the Activity waited an unusual amount of time.
-- **Set `startToCloseTimeout` to be more than the downstream call typically takes.** You want the downstream call to fail before the Activity times out. For example, for an HTTP request that times out after 30s, have the `startToCloseTimeout` be 45 or 60 seconds.
+- **Still set a meaningful RetryPolicy.** `nextRetryDelay` overrides the interval for a single retry; the RetryPolicy still governs maximum attempts and the intervals for attempts where `nextRetryDelay` is not set. Also ensure `scheduleToCloseTimeout` is long enough to accommodate the maximum possible `nextRetryDelay` value — a tight budget can cause the Activity to expire before the delayed retry executes.
+- **Surface the delay in the failure message.** Include the delay value and its source in the `ApplicationFailure` message (for example, `"Rate limited — retrying after 60s (Retry-After header)"`) so it appears directly in the Workflow history - Activity failure details. This makes it clear why the Activity waited an unusual amount of time without requiring separate log correlation.
 
 ## Common pitfalls
 
 - **Assuming `nextRetryDelay` persists across all retries.** It only applies to the immediate next retry. If the following attempt also fails without setting `nextRetryDelay`, the RetryPolicy interval resumes.
 - **Setting `nextRetryDelay` longer than `ScheduleToCloseTimeout`.** If the override delay exceeds the remaining `ScheduleToCloseTimeout` budget, the retry will never execute — Temporal will expire the Activity before the delay elapses.
-- **Using `nextRetryDelay` in Go or Python.** This feature is not available in those SDKs. For Go and Python, use `BackoffCoefficient=1.0` with a fixed `InitialInterval` to approximate a fixed delay.
-- **Setting `startToCloseTimeout` to be less than the downstream call typically takes.** If you set the `startToCloseTimeout` to be less than your call timeout, the Activity will be failed (and usually retried) even though the downstream call may have succeeded at the last moment.
+
 
 ## Related patterns
 
@@ -236,7 +239,3 @@ export async function apiWorkflow(endpoint: string): Promise<string> {
 ## References
 
 - [Per-error next Retry delay](https://docs.temporal.io/encyclopedia/retry-policies#per-error-next-retry-delay)
-- [Customize retry delays per error in the Java SDK](https://docs.temporal.io/develop/java/activities/timeouts#activity-next-retry-delay)
-- [Customize retry delays per error in the TypeScript SDK](https://docs.temporal.io/develop/typescript/activities/timeouts#activity-next-retry-delay)
-- [Customize retry delays per error in the Rust SDK](https://docs.temporal.io/develop/rust/activities/timeouts#next-retry-delay)
-
