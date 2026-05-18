@@ -1,6 +1,10 @@
 
 <h1>Priority Task Queues <img src="/images/priority-task-queues-icon.svg" alt="Priority Task Queues" class="pattern-page-icon"></h1>
 
+:::info TLDR
+Assign a `PriorityKey` (1–5) to Workflows and Activities so **high priority work executes ahead of lower priority work** on a shared Task Queue. Use this when a flood of batch or background tasks would otherwise delay high-urgency requests.
+:::
+
 ## Overview
 
 The Priority Task Queues pattern assigns a `PriorityKey` to Workflows, Activities, and Child Workflows so that time-sensitive work executes ahead of lower-priority work within a single Task Queue—without requiring separate queues or routing logic.

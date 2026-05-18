@@ -58,6 +58,19 @@ export default withMermaid(defineConfig({
         ]
       },
       {
+        text: 'Error Handling & Retry Patterns',
+        items: [
+          { text: 'Overview', link: '/error-handling-patterns' },
+          { text: 'Fixed Count of Retries', link: '/fixed-count-retries' },
+          { text: 'Fixed Wall-Time Retries', link: '/fixed-wall-time-retries' },
+          { text: 'Non-Retryable Errors', link: '/non-retryable-errors' },
+          { text: 'Delayed Retry', link: '/delayed-retry' },
+          { text: 'Fast/Slow Retries', link: '/fast-slow-retries' },
+          { text: 'Retry Alerting via Metrics', link: '/retry-metrics' },
+          { text: 'Resumable Activity', link: '/resumable-activity' }
+        ]
+      },
+      {
         text: 'Worker Configuration Patterns',
         items: [
           { text: 'Overview', link: '/worker-configuration-patterns' },

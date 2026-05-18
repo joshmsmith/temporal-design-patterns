@@ -89,3 +89,5 @@ The site deploys to GitHub Pages automatically when you push changes to the main
 
 - [@taonic](https://github.com/taonic)
 - [@darshitvvora](https://github.com/darshitvvora)
+- [@joshmsmith](https://github.com/joshmsmith)
+- [@lainecsmith](https://github.com/lainecsmith)
