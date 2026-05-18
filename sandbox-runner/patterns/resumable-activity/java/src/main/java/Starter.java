@@ -5,6 +5,16 @@ import io.temporal.serviceclient.WorkflowServiceStubs;
 
 public class Starter {
     public static void main(String[] args) throws InterruptedException {
+        // Register the TransferStatus search attribute (idempotent — ignored if already exists).
+        try {
+            new ProcessBuilder("temporal", "operator", "search-attribute", "create",
+                    "--name", "TransferStatus", "--type", "Keyword")
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+                    .waitFor();
+        } catch (Exception ignored) {}
+
         WorkflowServiceStubs service = WorkflowServiceStubs.newLocalServiceStubs();
         WorkflowClient client = WorkflowClient.newInstance(service);
 

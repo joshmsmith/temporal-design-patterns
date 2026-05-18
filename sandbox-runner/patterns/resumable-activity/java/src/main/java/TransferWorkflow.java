@@ -1,5 +1,6 @@
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.common.SearchAttributeKey;
 import io.temporal.failure.ActivityFailure;
 import io.temporal.workflow.QueryMethod;
 import io.temporal.workflow.SignalMethod;
@@ -52,9 +53,13 @@ public interface TransferWorkflow {
                     correctionCount++;
                     if (correctionCount > 5) {
                         status = "FAILED";
+                        Workflow.upsertTypedSearchAttributes(
+                                SearchAttributeKey.forKeyword("TransferStatus").valueSet(status));
                         throw e;
                     }
                     status = "AWAITING_CORRECTION";
+                    Workflow.upsertTypedSearchAttributes(
+                            SearchAttributeKey.forKeyword("TransferStatus").valueSet(status));
                     Workflow.getLogger(TransferWorkflow.class).warn(
                             "Transfer failed — waiting for account correction: {}", account);
                     // Park until the admin sends a correction signal
