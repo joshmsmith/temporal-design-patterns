@@ -43,4 +43,14 @@ Patterns for waiting on or interacting with systems and actors outside the Workf
 <p>Creates Workflows immediately but defers execution until a specified delay expires. Fits one-time scheduled operations and grace periods.</p>
 </a>
 </div>
+
+<div class="pattern-tile">
+<a href="webhooks">
+<div class="pattern-tile-header">
+<img src="/images/webhooks-icon.png" alt="Webhooks">
+<span>Webhooks</span>
+</div>
+<p>Three patterns for durable webhook integration: receive inbound webhooks via Signals, fire delayed outbound callbacks with durable timers, and complete activities asynchronously via task tokens.</p>
+</a>
+</div>
 </div>

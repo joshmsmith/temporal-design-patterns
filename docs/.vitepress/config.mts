@@ -53,7 +53,8 @@ export default withMermaid(defineConfig({
           { text: 'Polling External Services', link: '/polling' },
           { text: 'Long Running Activity', link: '/long-running-activity' },
           { text: 'Approval', link: '/approval' },
-          { text: 'Delayed Start', link: '/delayed-start' }
+          { text: 'Delayed Start', link: '/delayed-start' },
+          { text: 'Delayed Callback', link: '/delayed-callback' }
         ]
       },
       {

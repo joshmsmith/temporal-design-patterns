@@ -1,14 +1,16 @@
 # Temporal Design Patterns
 
 > **Warning:** This catalog is under active development. Content and structure may change.
->
-> Created by the Temporal Solution Architecture team. For questions, see the authors in the [Contributors](#contributors) section below.
->
 
 A catalog of design patterns for Temporal Workflows.
 
+<a href="https://temporal-design-patterns.fly.dev/"><img src="assets/catalog.png" alt="Live code runner" width="100%"></a>
+
+Including an in-browser code runner that supports multiple languages.
+
+<a href="https://temporal-design-patterns.fly.dev/"><img src="assets/live-code.png" alt="Live code runner" width="100%"></a>
+
 - [View the live site](https://temporal-design-patterns.fly.dev/)
-- [View the full pattern catalog](docs/README.md)
 - [Contributing guide](CONTRIBUTING.md)
 
 ## Development
