@@ -1,4 +1,5 @@
-import { ActivityFailure, log, proxyActivities, RetryState } from "@temporalio/workflow";
+import { ActivityFailure, log, proxyActivities } from "@temporalio/workflow";
+import { RetryState } from "@temporalio/common";
 
 import type * as activities from "./activities";
 

@@ -200,7 +200,7 @@ export async function paymentAuthWorkflow(transactionId: string): Promise<string
     } catch (err) {
         if (err instanceof wf.ActivityFailure) {
             const cause = err.cause;
-            if (cause instanceof wf.TimeoutError && cause.type === wf.TimeoutType.SCHEDULE_TO_CLOSE) {
+            if (cause instanceof wf.TimeoutFailure && cause.type === wf.TimeoutType.SCHEDULE_TO_CLOSE) {
                 wf.log.error('Authorization failed — 2-minute SLA breached', { transactionId });
             }
         }
@@ -268,7 +268,7 @@ const { authorizeTransaction } = wf.proxyActivities<typeof activities>({
 - **Set both timeouts for clarity.** Use `ScheduleToCloseTimeout` as the total SLA and `StartToCloseTimeout` as a per-attempt safety valve. Omitting `StartToCloseTimeout` means a single slow response can consume the entire budget.
 - **Cap `MaximumInterval` well below the SLA.** If `MaximumInterval` is 2 hours and the SLA is 24 hours, only 12 retries are possible. Tune the interval so the backoff plateaus at a value that allows meaningful retries within the budget.
 - **Handle `ActivityError` explicitly.** When the SLA expires, Temporal delivers an error to the Workflow. Catch it to send an alert, trigger a compensation, or record a breach in an audit log.
-- **Distinguish SLA breaches from transient errors.** Inspect the error cause — check that the `ActivityError`'s cause is a `TimeoutError` with `TimeoutType.SCHEDULE_TO_CLOSE` (Python/TypeScript) or `TIMEOUT_TYPE_SCHEDULE_TO_CLOSE` (Go/Java) to separate an SLA breach from an application failure. This lets you log or alert specifically on SLA violations rather than treating all activity errors the same way.
+- **Distinguish SLA breaches from transient errors.** Inspect the error cause — check that the `ActivityError`'s cause is a `TimeoutError` with `TimeoutType.SCHEDULE_TO_CLOSE` (Python) or a `TimeoutFailure` with `TimeoutType.SCHEDULE_TO_CLOSE` (TypeScript) or `TIMEOUT_TYPE_SCHEDULE_TO_CLOSE` (Go/Java) to separate an SLA breach from an application failure. This lets you log or alert specifically on SLA violations rather than treating all activity errors the same way.
 
 ## Common pitfalls
 
